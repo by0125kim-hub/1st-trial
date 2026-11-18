@@ -569,16 +569,8 @@ function goalCard(g) {
   const actions = el("div", "goal-actions");
   const talk = el("button", "small-btn solid", "이어서 대화하기");
   talk.onclick = () => continueGoal(g);
-  const del = el("button", "small-btn ghost-danger", "삭제");
-  del.onclick = () => { // 한 번 더 눌러야 삭제 (실수 방지)
-    if (!del.classList.contains("confirming")) {
-      del.classList.add("confirming");
-      del.textContent = "한 번 더 누르면 삭제";
-      setTimeout(() => { del.classList.remove("confirming"); del.textContent = "삭제"; }, 3000);
-      return;
-    }
-    goals = goals.filter((x) => x !== g); saveGoals(); render();
-  };
+  const del = confirmButton("small-btn ghost-danger", "삭제", "한 번 더 누르면 삭제",
+    () => { goals = goals.filter((x) => x !== g); saveGoals(); render(); });
   actions.append(del, talk);
   card.append(actions);
   return card;

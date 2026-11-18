@@ -203,7 +203,11 @@ function renderWrite(view, d) {
   view.append(form);
 
   const tasks = active(d);
-  if (!tasks.length) return view.append(el("p", "empty", "등록된 항목이 없습니다"));
+  if (!tasks.length) {
+    view.append(el("p", "empty", "등록된 항목이 없습니다"));
+    if (d.tasks.length || d.note || d.reviewed) view.append(resetDayButton()); // 이월 기록·회고만 남은 경우
+    return;
+  }
   const ul = el("ul", "list");
   tasks.forEach((t) => {
     const li = el("li", "row");
@@ -226,6 +230,43 @@ function renderWrite(view, d) {
   });
   view.append(ul);
   view.append(el("p", "hint gap", "⠿ 를 끌어서 순서를 바꾸고, ✎ 로 내용을 고칠 수 있습니다."));
+  view.append(resetDayButton());
+}
+
+// 두 번 눌러야 실행되는 버튼 (실수 방지)
+function confirmButton(cls, label, confirmLabel, onConfirm) {
+  const b = el("button", cls, label);
+  b.onclick = () => {
+    if (!b.classList.contains("confirming")) {
+      b.classList.add("confirming");
+      b.textContent = confirmLabel;
+      setTimeout(() => { b.classList.remove("confirming"); b.textContent = label; }, 3000);
+      return;
+    }
+    onConfirm();
+  };
+  return b;
+}
+
+// 보고 있는 날짜의 기록을 모두 지우기
+function resetDayButton() {
+  const wrap = el("div", "reset-day");
+  wrap.append(confirmButton("small-btn ghost-danger", "이 날 초기화", "한 번 더 누르면 이 날의 할 일·기록이 모두 지워집니다", resetDay));
+  return wrap;
+}
+
+function resetDay() {
+  const d = db[day];
+  // 이 날 목표에서 가져온 1회성 할 일은 다시 가져올 수 있게 되돌려요
+  const items = goals.flatMap((g) => g.backlog);
+  for (const t of d?.tasks || []) {
+    const item = t.goalItem && items.find((x) => x.id === t.goalItem);
+    if (item && item.lastAdded === day) delete item.lastAdded;
+  }
+  delete db[day];
+  editingId = null;
+  picked = null;
+  save(); saveGoals(); render();
 }
 
 // 할 일 문구 고치기 (Enter 저장, Esc 취소)
