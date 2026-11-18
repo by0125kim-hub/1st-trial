@@ -248,10 +248,45 @@ function confirmButton(cls, label, confirmLabel, onConfirm) {
   return b;
 }
 
-// 보고 있는 날짜의 기록을 모두 지우기
+// 보고 있는 날짜 초기화: 무엇을 지울지 고르는 패널
+let resetOpen = false;   // 선택지가 펼쳐져 있는지
+let resetNote = "";      // 방금 한 일 안내
+
+const RESET_OPTIONS = [
+  { label: "시간 배치만 비우기", desc: "할 일은 그대로 두고 시간표에서만 뺍니다",
+    run: (d) => d.tasks.forEach((t) => { t.slot = null; t.synced = false; }), done: "시간 배치를 비웠습니다." },
+  { label: "완료 표시만 지우기", desc: "체크한 할 일을 모두 미완료로 되돌립니다",
+    run: (d) => { d.tasks.forEach((t) => { t.done = false; }); d.reviewed = false; }, done: "완료 표시를 지웠습니다." },
+  { label: "회고·마감만 지우기", desc: "회고 글과 하루 마감 상태를 지웁니다",
+    run: (d) => { d.note = ""; d.reviewed = false; d.reviewSynced = false; }, done: "회고와 마감 상태를 지웠습니다." },
+];
+
 function resetDayButton() {
   const wrap = el("div", "reset-day");
-  wrap.append(confirmButton("small-btn ghost-danger", "이 날 초기화", "한 번 더 누르면 이 날의 할 일·기록이 모두 지워집니다", resetDay));
+  const toggle = el("button", "small-btn", resetOpen ? "닫기" : "이 날 초기화…");
+  toggle.onclick = () => { resetOpen = !resetOpen; resetNote = ""; render(); };
+  wrap.append(toggle);
+  if (!resetOpen) return wrap;
+
+  const panel = el("div", "reset-panel card");
+  panel.append(el("p", "label-sm", `${toDate(day).toLocaleDateString("ko-KR", { month: "long", day: "numeric" })} — 무엇을 초기화할까요?`));
+  const d = dayData(day);
+  RESET_OPTIONS.forEach((o) => {
+    const row = el("div", "reset-row");
+    const text = el("p");
+    text.append(el("strong", null, o.label), el("span", null, o.desc));
+    const b = el("button", "small-btn", "실행");
+    b.onclick = () => { o.run(d); resetNote = o.done; save(); render(); };
+    row.append(text, b);
+    panel.append(row);
+  });
+  const row = el("div", "reset-row");
+  const text = el("p");
+  text.append(el("strong", null, "전체 초기화"), el("span", null, "할 일, 시간 배치, 완료, 회고까지 이 날의 기록을 모두 지웁니다"));
+  row.append(text, confirmButton("small-btn ghost-danger", "모두 지우기", "한 번 더 누르면 삭제", resetDay));
+  panel.append(row);
+  if (resetNote) panel.append(el("p", "reset-note", resetNote));
+  wrap.append(panel);
   return wrap;
 }
 
@@ -266,6 +301,7 @@ function resetDay() {
   delete db[day];
   editingId = null;
   picked = null;
+  resetNote = "이 날의 기록을 모두 지웠습니다.";
   save(); saveGoals(); render();
 }
 
@@ -394,6 +430,7 @@ function renderSchedule(view, d) {
 
   view.append(el("p", "hint gap", "블록의 '+ 캘린더'를 누르면 구글 캘린더에 해당 시간의 일정이 채워진 채로 열립니다. 저장하면 캘린더 앱이 알림을 보내줍니다."));
   if (settings.reminder !== REMINDER.label) view.append(reminderCard());
+  view.append(resetDayButton());
 }
 
 // ---- 4. 마무리 ----
@@ -476,6 +513,7 @@ function renderReview(view, d) {
       reviewEvent(d), () => { d.reviewSynced = true; save(); render(); }));
   }
   if (settings.reminder !== REMINDER.label) view.append(reminderCard());
+  view.append(resetDayButton());
 }
 
 function moveToTomorrow(t) {
@@ -487,7 +525,7 @@ function moveToTomorrow(t) {
 // =========================================================
 //  버튼 연결
 // =========================================================
-function goDay(key) { day = key; picked = null; step = pickStep(); render(); }
+function goDay(key) { day = key; picked = null; resetOpen = false; step = pickStep(); render(); }
 $("prevDay").onclick = () => goDay(shiftDay(day, -1));
 $("nextDay").onclick = () => goDay(shiftDay(day, 1));
 $("todayBtn").onclick = () => goDay(dateKey());
@@ -495,7 +533,7 @@ $("goReview").onclick = () => { step = 4; render(); };
 $("steps").onclick = (e) => {
   const b = e.target.closest("button");
   if (!b) return;
-  step = +b.dataset.s; picked = null; render();
+  step = +b.dataset.s; picked = null; resetOpen = false; render();
 };
 $("next").onclick = () => { step = Math.min(4, step + 1); picked = null; render(); scrollTo({ top: 0, behavior: "smooth" }); };
 

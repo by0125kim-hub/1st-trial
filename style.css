@@ -279,3 +279,13 @@ body.dragging, body.dragging * { cursor: grabbing !important; user-select: none;
 .pick-toggle input { accent-color: var(--accent); }
 .reset-day { display: flex; justify-content: flex-end; margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
 .reset-day .small-btn { font-size: 12px; }
+.reset-day { flex-direction: column; align-items: flex-end; gap: 10px; }
+.reset-panel { align-self: stretch; padding: 14px 16px; }
+.reset-panel .label-sm { margin-top: 0; }
+.reset-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.reset-row + .reset-row { border-top: 1px solid var(--line-soft); }
+.reset-row p { margin: 0; min-width: 0; }
+.reset-row strong { display: block; font-size: 14px; }
+.reset-row span { font-size: 12px; color: var(--muted); }
+.reset-row .small-btn { flex: none; }
+.reset-note { margin: 8px 0 0; font-size: 13px; color: var(--accent); font-weight: 600; }
