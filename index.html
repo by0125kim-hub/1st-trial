@@ -8,13 +8,43 @@
 </head>
 <body>
   <main>
-    <h1>📝 할 일 목록</h1>
-    <form id="form">
-      <input id="input" placeholder="할 일을 입력하세요" autocomplete="off">
-      <button>추가</button>
+    <header>
+      <div>
+        <p class="date" id="today"></p>
+        <h1>오늘의 할 일</h1>
+      </div>
+      <div class="ring" id="ring" aria-label="진행률"><span id="percent">0%</span></div>
+    </header>
+
+    <form id="form" class="card">
+      <input id="input" placeholder="무엇을 해야 하나요?" autocomplete="off" maxlength="100">
+      <div class="options">
+        <input id="due" type="date" aria-label="마감일">
+        <select id="priority" aria-label="우선순위">
+          <option value="high">🔴 높음</option>
+          <option value="mid" selected>🟡 보통</option>
+          <option value="low">🟢 낮음</option>
+        </select>
+        <select id="category" aria-label="카테고리">
+          <option>일상</option><option>공부</option><option>업무</option><option>운동</option><option>쇼핑</option>
+        </select>
+        <button class="primary">추가</button>
+      </div>
     </form>
+
+    <nav class="filters" id="filters">
+      <button data-f="all" class="active">전체</button>
+      <button data-f="active">진행중</button>
+      <button data-f="done">완료</button>
+    </nav>
+
     <ul id="list"></ul>
-    <p id="count"></p>
+    <p id="empty" class="empty" hidden>✨ 할 일이 없어요. 하나 추가해 볼까요?</p>
+
+    <footer>
+      <span id="count"></span>
+      <button id="clear" class="ghost">완료 항목 삭제</button>
+    </footer>
   </main>
   <script src="app.js"></script>
 </body>
