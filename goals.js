@@ -2,6 +2,7 @@
 //  00 목표
 //  문답으로 목표와 기한을 정리하고, 이루기 위한 할 일을 추천받아
 //  매일의 계획(01 작성)에 넣을 수 있게 해요.
+//  저장한 목표는 언제든 "이어서 대화하기"로 다시 조정할 수 있어요.
 //  - 기본: 앱에 내장된 분야별 추천 (무료)
 //  - Claude 안(아티팩트)에서 열면: 로그인한 Claude 계정(Pro 등)의 사용량으로 AI 코치
 //  - 그 밖에서 API 키를 넣으면: Anthropic API로 AI 코치
@@ -15,8 +16,10 @@ const saveGoals = () => { try { localStorage.setItem(GOALS_KEY, JSON.stringify(g
 
 const AREAS = ["건강·운동", "공부·자격증", "커리어·업무", "재정", "관계·가족", "취미·자기계발", "기타"];
 const CADENCE = { once: "1회", daily: "매일", weekly: "매주" };
+const NEXT_PRIORITY = { high: "mid", mid: "low", low: "high" };
+const CHAT_KEEP = 40; // 목표마다 보관할 대화 수
 
-// ---- 문답 질문 목록 ----
+// ---- 처음 목표를 세울 때의 질문 ----
 const QUESTIONS = [
   { key: "kind", type: "chips", options: ["하고 싶은 것", "해야만 하는 것", "되고 싶은 모습"],
     q: "오늘 할 일을 정하기 전에, 이루고 싶은 것부터 정리해 보겠습니다.\n어떤 종류의 목표인가요?" },
@@ -34,13 +37,24 @@ const QUESTIONS = [
 ];
 const QUICK_DEADLINES = [["1개월", 1], ["3개월", 3], ["6개월", 6], ["1년", 12]];
 
-// 진행 중인 문답 상태 (null이면 목표 목록 화면)
+// ---- 이어서 대화할 때 빠르게 고를 수 있는 말 ----
+const CONTINUE_STARTERS = [
+  "요즘 진행 상황을 공유할게요",
+  "할 일이 너무 많아요",
+  "새로운 할 일이 더 필요해요",
+  "기한을 조정하고 싶어요",
+];
+
+// 진행 중인 대화 상태 (null이면 목표 목록 화면)
 let wizard = null;
+// 고치는 중인 추천 할 일
+let editingItem = null;
 
 // ---- 날짜 도우미 ----
 function monthsLater(n) { const d = toDate(dateKey()); d.setMonth(d.getMonth() + n); return dateKey(d); }
 const daysLeft = (key) => Math.round((toDate(key) - toDate(dateKey())) / 86_400_000);
 const fmtDate = (key) => key.replaceAll("-", ".");
+const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || "");
 function dday(key) {
   const n = daysLeft(key);
   return n > 0 ? `D-${n}` : n === 0 ? "D-day" : `기한 +${-n}일`;
@@ -67,24 +81,36 @@ const AREA_TASKS = {
     ["관련 작업 시간 확보", "daily", "mid"], ["주간 진행 점검", "weekly", "mid"]],
 };
 
-function builtinPlan(a) {
-  const days = Math.max(daysLeft(a.deadline), 3);
+function builtinTasks(a) {
   const tasks = [
     { text: `'${a.title}'의 완료 기준을 한 문장으로 정의하기`, cadence: "once", priority: "high", first: true },
     ...(AREA_TASKS[a.area] || AREA_TASKS["기타"]).map(([text, cadence, priority, first]) => ({ text, cadence, priority, first: !!first })),
   ];
   if (a.time === "주말에만") tasks.forEach((t) => { if (t.cadence === "daily") t.cadence = "weekly"; });
+  return tasks;
+}
+
+function builtinPlan(a) {
+  const days = Math.max(daysLeft(a.deadline), 3);
   const milestones = [
     { title: "기반 다지기: 준비 완료, 습관 정착", date: shiftDay(dateKey(), Math.round(days / 3)) },
     { title: "중간 점검: 진행 상황 확인, 계획 조정", date: shiftDay(dateKey(), Math.round((days * 2) / 3)) },
     { title: `완료: ${a.title}`, date: a.deadline },
   ];
-  return { status: "plan", message: "분야별 기본 추천입니다. 필요 없는 항목은 체크를 해제하세요.", question: "", goal_summary: a.title, milestones, tasks };
+  return { status: "plan", message: "분야별 기본 추천입니다. 필요 없는 할 일은 지우고, 문구는 눌러서 고치세요.",
+    question: "", goal_summary: a.title, deadline: "", milestones, tasks: builtinTasks(a) };
+}
+
+// 이어서 대화할 때(AI 없음): 아직 목록에 없는 기본 추천만 보여줘요
+function builtinContinuePlan(g) {
+  const have = new Set(g.backlog.map((t) => t.text));
+  return { status: "plan", question: "", goal_summary: "", deadline: "", milestones: [],
+    message: "AI 코치가 연결되어 있지 않아 말씀을 분석하지는 못합니다. 아직 목록에 없는 기본 추천을 보여드리니, 필요한 것만 남기거나 직접 추가하세요.",
+    tasks: builtinTasks(g).filter((t) => !have.has(t.text)).map((t) => ({ ...t, first: false })) };
 }
 
 // =========================================================
 //  추천 2) Claude AI 코치
-//  사용자의 API 키로 브라우저에서 바로 Claude API를 호출해요.
 // =========================================================
 const SDK_URL = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.4.0/+esm";
 const AI_MODEL = "claude-opus-5-5";
@@ -99,30 +125,41 @@ if (window.claude?.use) {
 const aiMode = () => (claudeSample ? "claude" : settings.apiKey ? "api" : null);
 const AI_LABEL = { claude: "AI 코치 · 내 Claude 계정", api: "AI 코치 · API 키" };
 
-const COACH_PROMPT = `당신은 바쁜 전문직 종사자의 목표 달성을 돕는 코치입니다. 사용자가 문답으로 답한 목표 정보를 받아, 기한 안에 이룰 수 있는 실행 계획을 한국어로 제안합니다.
+const COACH_PROMPT = `당신은 바쁜 전문직 종사자의 목표 달성을 돕는 코치입니다. 사용자의 목표 정보를 받아, 기한 안에 이룰 수 있는 실행 계획을 한국어로 제안합니다.
 
 진행 방식:
-- 계획을 세우는 데 꼭 필요한 정보가 빠졌거나 목표가 모호할 때만 status를 "ask"로 하고 question에 질문 하나를 씁니다. 남은 질문 횟수가 0이면 반드시 "plan"으로 답합니다.
-- 충분하면 status를 "plan"으로 하고 goal_summary, milestones, tasks를 채웁니다. "ask"일 때는 goal_summary는 빈 문자열, milestones와 tasks는 빈 배열로 둡니다.
-- message는 1~2문장의 짧고 정중한 코멘트입니다(예: 목표에 대한 짧은 피드백). 과장된 칭찬이나 이모지는 쓰지 않습니다.
+- 계획을 세우는 데 꼭 필요한 정보가 빠졌거나 모호할 때만 status를 "ask"로 하고 question에 질문 하나를 씁니다. 남은 질문 횟수가 0이면 반드시 "plan"으로 답합니다.
+- 충분하면 status를 "plan"으로 하고 나머지 항목을 채웁니다. "ask"일 때는 goal_summary와 deadline은 빈 문자열, milestones와 tasks는 빈 배열로 둡니다.
+- message는 1~2문장의 짧고 정중한 코멘트입니다. 과장된 칭찬이나 이모지는 쓰지 않습니다.
 
 계획 기준:
 - goal_summary: 측정 가능한 형태로 다듬은 목표 한 문장.
+- deadline: 기한을 바꾸기로 했을 때만 YYYY-MM-DD, 아니면 빈 문자열.
 - milestones: 오늘부터 기한 사이의 중간 목표 2~4개. date는 YYYY-MM-DD, 마지막은 기한 날짜.
-- tasks: 5~8개. 30~90분 안에 끝낼 수 있는 구체적인 행동으로, 동사로 끝나게 씁니다.
+- tasks: 30~90분 안에 끝낼 수 있는 구체적인 행동으로, 동사로 끝나게 씁니다.
   - cadence: 한 번 하면 되는 일은 "once", 습관은 "daily" 또는 "weekly". 사용자가 쓸 수 있는 시간에 맞게 정합니다.
   - priority: 목표 달성에 가장 결정적인 일만 "high".
   - first: 오늘 바로 시작하기 좋은 첫 행동 1~2개만 true.`;
 
+const NEW_GOAL_RULES = "[이번 요청] 새 목표의 계획을 세웁니다. tasks는 5~8개, deadline은 빈 문자열로 둡니다.";
+
+const CONTINUE_RULES = `[이번 요청] 이미 세운 목표에 대해 사용자와 이어서 이야기합니다. 목표 현황, 최근 실행 기록, 사용자의 말을 보고 계획을 조정합니다.
+- tasks에는 지금 할 일 목록에 "새로 추가할" 할 일만 0~6개 넣습니다. 이미 있는 할 일과 겹치지 않게 합니다.
+- 할 일이 너무 많다는 말이면 tasks는 비우고, message에 어떤 할 일을 빼거나 줄이면 좋을지 구체적으로 적습니다(삭제는 사용자가 직접 합니다).
+- milestones는 바꿀 필요가 있을 때만 전체를 다시 쓰고, 아니면 빈 배열로 둡니다.
+- goal_summary는 목표 문장을 바꿔야 할 때만 쓰고, 아니면 빈 문자열로 둡니다.
+- 진행 상황을 들었다면 message에서 실행 기록을 근거로 짧게 피드백합니다.`;
+
 const PLAN_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["status", "message", "question", "goal_summary", "milestones", "tasks"],
+  required: ["status", "message", "question", "goal_summary", "deadline", "milestones", "tasks"],
   properties: {
     status: { type: "string", enum: ["ask", "plan"] },
     message: { type: "string" },
     question: { type: "string" },
     goal_summary: { type: "string" },
+    deadline: { type: "string" },
     milestones: { type: "array", items: { type: "object", additionalProperties: false, required: ["title", "date"],
       properties: { title: { type: "string" }, date: { type: "string" } } } },
     tasks: { type: "array", items: { type: "object", additionalProperties: false, required: ["text", "cadence", "priority", "first"],
@@ -133,9 +170,9 @@ const PLAN_SCHEMA = {
 
 // Claude 계정 방식은 형식 지정 기능이 없어서, 원하는 JSON 모양을 글로 알려줘요
 const JSON_FORMAT = `다른 글 없이 아래 형식의 JSON 객체 하나로만 답하세요.
-{"status":"ask 또는 plan","message":"짧은 코멘트","question":"추가 질문(ask일 때만, 아니면 빈 문자열)","goal_summary":"다듬은 목표 한 문장","milestones":[{"title":"중간 목표","date":"YYYY-MM-DD"}],"tasks":[{"text":"할 일","cadence":"once 또는 daily 또는 weekly","priority":"high 또는 mid 또는 low","first":true}]}`;
+{"status":"ask 또는 plan","message":"짧은 코멘트","question":"추가 질문(ask일 때만, 아니면 빈 문자열)","goal_summary":"다듬은 목표 한 문장 또는 빈 문자열","deadline":"YYYY-MM-DD 또는 빈 문자열","milestones":[{"title":"중간 목표","date":"YYYY-MM-DD"}],"tasks":[{"text":"할 일","cadence":"once 또는 daily 또는 weekly","priority":"high 또는 mid 또는 low","first":true}]}`;
 
-function describeAnswers(a, followUpsLeft) {
+function describeAnswers(a) {
   return [
     `오늘 날짜: ${dateKey()}`,
     `목표 종류: ${a.kind}`,
@@ -145,8 +182,37 @@ function describeAnswers(a, followUpsLeft) {
     `기한: ${a.deadline} (${daysLeft(a.deadline)}일 남음)`,
     `현재 상태: ${a.current || "(답하지 않음)"}`,
     `쓸 수 있는 시간: ${a.time}`,
-    `남은 추가 질문 횟수: ${followUpsLeft}`,
   ].join("\n");
+}
+
+// 이어서 대화할 때 AI에게 알려줄 목표 현황
+function goalContext(g) {
+  const lines = (arr, f) => (arr.length ? arr.map(f).join("\n") : "- 없음");
+  return [
+    `오늘 날짜: ${dateKey()}`,
+    `목표: ${g.summary} (처음 표현: ${g.title})`,
+    `종류·분야: ${g.kind} · ${g.area}`,
+    `이유: ${g.why || "-"}`,
+    `기한: ${g.deadline} (${daysLeft(g.deadline)}일 남음)`,
+    `쓸 수 있는 시간: ${g.time}`,
+    `중간 목표:\n${lines(g.milestones || [], (m) => `- ${m.date} ${m.title}`)}`,
+    `현재 할 일 목록:\n${lines(g.backlog, (t) => `- [${CADENCE[t.cadence]}·${PRIORITY[t.priority]}] ${t.text}`)}`,
+    `최근 14일 실행 기록: ${recentRecord(g)}`,
+    `최근 대화:\n${lines((g.chat || []).slice(-6), (m) => `- ${m.from === "me" ? "사용자" : "코치"}: ${m.text.replace(/\n/g, " ")}`)}`,
+  ].join("\n");
+}
+
+// 최근 14일 동안 이 목표에서 계획한 할 일과 완료한 할 일
+function recentRecord(g) {
+  let planned = 0, done = 0;
+  for (let i = 0; i < 14; i++) {
+    for (const t of db[shiftDay(dateKey(), -i)]?.tasks || []) {
+      if (t.goalId !== g.id || t.moved) continue;
+      planned++;
+      if (t.done) done++;
+    }
+  }
+  return planned ? `계획 ${planned}개 중 ${done}개 완료` : "아직 기록 없음";
 }
 
 // 내 Claude 계정으로 묻기 (Claude 안에서 열었을 때)
@@ -166,8 +232,6 @@ async function askClaudeAccount(turns) {
     throw new Error(SAMPLE_ERRORS[err?.code] || "Claude 응답을 받지 못했습니다.");
   }
   if (!out || typeof out !== "object") throw new Error("Claude 응답을 읽지 못했습니다.");
-  out.milestones = Array.isArray(out.milestones) ? out.milestones : [];
-  out.tasks = Array.isArray(out.tasks) ? out.tasks : [];
   turns.push({ role: "assistant", content: JSON.stringify(out) });
   return out;
 }
@@ -203,15 +267,39 @@ async function askApi(convo) {
   return out;
 }
 
+// AI 응답을 앱에서 쓰기 좋게 정리
+function cleanPlan(out) {
+  const tasks = (Array.isArray(out.tasks) ? out.tasks : [])
+    .filter((t) => t && String(t.text || "").trim())
+    .map((t) => ({ text: String(t.text).trim(), cadence: CADENCE[t.cadence] ? t.cadence : "once",
+      priority: PRIORITY[t.priority] ? t.priority : "mid", first: !!t.first }));
+  const milestones = (Array.isArray(out.milestones) ? out.milestones : [])
+    .filter((m) => m && m.title && isDate(m.date)).map((m) => ({ title: String(m.title), date: m.date }));
+  return { status: out.status === "ask" ? "ask" : "plan", message: String(out.message || ""), question: String(out.question || ""),
+    goal_summary: String(out.goal_summary || ""), deadline: isDate(out.deadline) ? out.deadline : "", milestones, tasks };
+}
+
 // =========================================================
-//  문답 진행
+//  대화 진행
 // =========================================================
 const questionText = (q) => (typeof q.q === "function" ? q.q(wizard.answers) : q.q);
+const newWizard = (extra) => ({ i: 0, answers: {}, chat: [], convo: [], turns: [], asks: 0, busy: false,
+  plan: null, followUp: false, forced: false, ...extra });
 
+// 새 목표 세우기
 function startWizard() {
-  wizard = { i: 0, answers: {}, chat: [], convo: [], turns: [], asks: 0, busy: false, plan: null, followUp: false, forced: false };
+  wizard = newWizard({ mode: "new" });
   wizard.chat.push({ from: "bot", text: questionText(QUESTIONS[0]) });
   render();
+}
+
+// 저장한 목표와 이어서 대화하기
+function continueGoal(g) {
+  wizard = newWizard({ mode: "continue", goalId: g.id, i: QUESTIONS.length, answers: { ...g }, history: (g.chat || []).slice(-4) });
+  wizard.chat.push({ from: "bot", text: `'${g.summary}' (${dday(g.deadline)})\n그동안 어떻게 진행됐나요? 바뀐 점, 막힌 점, 새로 하고 싶은 것을 자유롭게 알려주세요.` });
+  step = 0;
+  render();
+  scrollTo({ top: 0 });
 }
 
 function answer(value, label) {
@@ -233,27 +321,39 @@ function addUserTurn(w, content) {
   w.turns.push({ role: "user", content });
 }
 
-function answerFollowUp(text) {
-  wizard.chat.push({ from: "me", text });
-  addUserTurn(wizard, `${text}\n\n(남은 추가 질문 횟수: ${MAX_FOLLOW_UPS - wizard.asks})`);
-  wizard.followUp = false;
+// 자유롭게 입력한 말 (추가 질문에 대한 답, 또는 이어서 대화하기)
+function sendMessage(text) {
+  const w = wizard;
+  w.chat.push({ from: "me", text });
+  w.followUp = false;
+  w.plan = null;
+  if (!w.convo.length && w.mode === "continue") {
+    const g = goals.find((x) => x.id === w.goalId);
+    const body = `${CONTINUE_RULES}\n\n[목표 현황]\n${goalContext(g)}\n\n[사용자의 말]\n${text}\n\n남은 추가 질문 횟수: ${MAX_FOLLOW_UPS}`;
+    w.convo.push({ role: "user", content: body });
+    w.turns.push({ role: "user", content: `${COACH_PROMPT}\n\n${JSON_FORMAT}\n\n${body}` });
+  } else {
+    addUserTurn(w, `${text}\n\n(남은 추가 질문 횟수: ${MAX_FOLLOW_UPS - w.asks})`);
+  }
   makePlan();
 }
 
 async function makePlan() {
-  const a = wizard.answers;
-  const mode = aiMode();
-  if (!mode) return showPlan(builtinPlan(a), "builtin");
-
   const w = wizard;
+  const goal = w.mode === "continue" && goals.find((x) => x.id === w.goalId);
+  const fallback = () => (goal ? builtinContinuePlan(goal) : builtinPlan(w.answers));
+  const mode = aiMode();
+  if (!mode) return showPlan(fallback(), "builtin");
+
   w.busy = true; render();
-  if (!w.convo.length) {
-    w.convo.push({ role: "user", content: describeAnswers(a, MAX_FOLLOW_UPS) });
-    w.turns.push({ role: "user", content: `${COACH_PROMPT}\n\n${JSON_FORMAT}\n\n${describeAnswers(a, MAX_FOLLOW_UPS)}` });
+  if (!w.convo.length) { // 새 목표: 문답 결과로 첫 요청
+    const body = `${NEW_GOAL_RULES}\n\n${describeAnswers(w.answers)}\n\n남은 추가 질문 횟수: ${MAX_FOLLOW_UPS}`;
+    w.convo.push({ role: "user", content: body });
+    w.turns.push({ role: "user", content: `${COACH_PROMPT}\n\n${JSON_FORMAT}\n\n${body}` });
   }
   try {
-    const out = mode === "claude" ? await askClaudeAccount(w.turns) : await askApi(w.convo);
-    if (wizard !== w) return; // 기다리는 동안 사용자가 취소함
+    const out = cleanPlan(mode === "claude" ? await askClaudeAccount(w.turns) : await askApi(w.convo));
+    if (wizard !== w) return; // 기다리는 동안 사용자가 나감
     w.busy = false;
     if (out.status === "ask" && out.question) {
       if (w.asks < MAX_FOLLOW_UPS) {
@@ -264,45 +364,43 @@ async function makePlan() {
       }
       if (!w.forced) { // 질문 횟수를 다 썼는데 또 질문하면 계획을 요청
         w.forced = true;
-        addUserTurn(w, "추가 질문 없이 지금까지의 정보로 계획을 만들어 주세요.");
+        addUserTurn(w, "추가 질문 없이 지금까지의 정보로 답해 주세요.");
         return makePlan();
       }
     }
-    if (out.status !== "plan" || !out.tasks.length) throw new Error("AI가 계획을 만들지 못했습니다.");
+    if (!goal && !out.tasks.length) throw new Error("AI가 계획을 만들지 못했습니다.");
     showPlan(out, "ai");
   } catch (err) {
     if (wizard !== w) return;
     w.busy = false;
     w.chat.push({ from: "bot", text: `${err.message} 대신 기본 추천을 보여드립니다.` });
-    showPlan(builtinPlan(a), "builtin");
+    showPlan(fallback(), "builtin");
   }
 }
 
 function showPlan(plan, source) {
-  wizard.plan = { ...plan, source, picked: plan.tasks.map(() => true) };
+  wizard.plan = { ...plan, source, tasks: plan.tasks.map((t) => ({ id: uid(), ...t })), useMilestones: true };
   if (plan.message) wizard.chat.push({ from: "bot", text: plan.message });
   render();
 }
 
-// 저장한 목표로 AI 추천을 다시 받기
-function regenerate(goal) {
-  const answers = { kind: goal.kind, title: goal.title, why: goal.why, area: goal.area, deadline: goal.deadline, current: goal.current, time: goal.time };
-  wizard = { i: QUESTIONS.length, answers, chat: [{ from: "bot", text: `'${goal.title}'의 추천을 다시 받습니다.` }],
-    convo: [], turns: [], asks: 0, busy: false, plan: null, followUp: false, forced: false, replacing: goal.id };
-  makePlan();
-}
-
-function saveGoal(addFirst) {
-  const a = wizard.answers, p = wizard.plan;
-  const picked = p.tasks.filter((_, i) => p.picked[i]).map((t) => ({ id: uid(), ...t }));
-  let goal = wizard.replacing && goals.find((g) => g.id === wizard.replacing);
-  if (goal) {
-    Object.assign(goal, { summary: p.goal_summary || a.title, milestones: p.milestones, backlog: picked, source: p.source });
+// 대화 결과를 목표에 저장
+function savePlan(addFirst) {
+  const w = wizard, a = w.answers, p = w.plan;
+  let goal;
+  if (w.mode === "continue") {
+    goal = goals.find((g) => g.id === w.goalId);
+    goal.backlog.push(...p.tasks);
+    if (p.goal_summary) goal.summary = p.goal_summary;
+    if (p.deadline && daysLeft(p.deadline) > 0) goal.deadline = p.deadline;
+    if (p.milestones.length && p.useMilestones) goal.milestones = p.milestones;
   } else {
-    goal = { id: uid(), ...a, summary: p.goal_summary || a.title, created: dateKey(), source: p.source, milestones: p.milestones, backlog: picked };
+    goal = { id: uid(), ...a, summary: p.goal_summary || a.title, created: dateKey(), source: p.source,
+      milestones: p.milestones, backlog: p.tasks, chat: [] };
     goals.unshift(goal);
   }
-  if (addFirst) goal.backlog.filter((t) => t.first || t.cadence === "daily").forEach((t) => addFromGoal(goal, t, dateKey()));
+  goal.chat = [...(goal.chat || []), ...w.chat].slice(-CHAT_KEEP); // 다음 대화에서 이어갈 수 있게 보관
+  if (addFirst) p.tasks.filter((t) => t.first || t.cadence === "daily").forEach((t) => addFromGoal(goal, t, dateKey()));
   saveGoals();
   wizard = null;
   if (addFirst) { day = dateKey(); step = 1; }
@@ -352,11 +450,88 @@ function goalSuggestions(view) {
 }
 
 // =========================================================
+//  할 일 목록 편집 (추천 결과와 저장된 목표에서 같이 사용)
+//  · 점을 누르면 우선순위 변경 · 문구를 누르면 수정 · 주기 선택 · ✕ 삭제
+// =========================================================
+function itemList(items, { onChange, extra }) {
+  const list = el("div", "item-list");
+  if (!items.length) list.append(el("p", "muted item-empty", "할 일이 없습니다. 아래에서 직접 추가할 수 있습니다."));
+  items.forEach((item) => {
+    const row = el("div", "item-row");
+
+    const dot = el("button", "dot-btn");
+    dot.append(el("i", "dot " + item.priority));
+    dot.title = `우선순위: ${PRIORITY[item.priority]} (눌러서 변경)`;
+    dot.onclick = () => { item.priority = NEXT_PRIORITY[item.priority]; onChange(); };
+
+    let text;
+    if (editingItem === item) {
+      text = el("input", "edit-input");
+      text.value = item.text;
+      text.maxLength = 100;
+      let closed = false;
+      const finish = (keep) => {
+        if (closed) return;
+        closed = true;
+        if (keep && text.value.trim()) item.text = text.value.trim();
+        editingItem = null;
+        onChange();
+      };
+      text.onkeydown = (e) => { if (e.key === "Enter") finish(true); if (e.key === "Escape") finish(false); };
+      text.onblur = () => finish(true);
+      setTimeout(() => text.focus());
+    } else {
+      text = el("button", "item-text", item.text);
+      text.title = "눌러서 수정";
+      text.onclick = () => { editingItem = item; render(); };
+    }
+
+    const cadence = el("select", "cadence-select");
+    for (const [k, label] of Object.entries(CADENCE)) {
+      const o = el("option", null, label);
+      o.value = k;
+      cadence.append(o);
+    }
+    cadence.value = item.cadence;
+    cadence.title = "주기";
+    cadence.onchange = () => { item.cadence = cadence.value; onChange(); };
+
+    const del = el("button", "icon", "✕");
+    del.title = "삭제";
+    del.onclick = () => { items.splice(items.indexOf(item), 1); onChange(); };
+
+    row.append(dot, text, cadence);
+    const more = extra?.(item);
+    if (more) row.append(more);
+    row.append(del);
+    list.append(row);
+  });
+  return list;
+}
+
+// 할 일 직접 추가 입력칸
+function addItemForm(items, onChange) {
+  const form = el("form", "add-item");
+  const input = el("input");
+  input.placeholder = "+ 할 일 직접 추가";
+  input.maxLength = 100;
+  form.append(input, el("button", "small-btn", "추가"));
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const v = input.value.trim();
+    if (!v) return;
+    items.push({ id: uid(), text: v, cadence: "once", priority: "mid", first: false });
+    onChange();
+  };
+  return form;
+}
+
+// =========================================================
 //  00 목표 화면
 // =========================================================
 function renderGoals(view) {
   if (wizard) return renderWizard(view);
-  view.append(el("p", "hint", "목표를 먼저 정리해 두면, 목표에서 나온 할 일을 매일 계획에 바로 넣을 수 있습니다."));
+  view.append(el("p", "hint", "목표를 정리해 두면 목표에서 나온 할 일을 매일 계획에 바로 넣을 수 있습니다. 상황이 바뀌면 '이어서 대화하기'로 언제든 조정하세요."));
   const add = el("button", "primary block", "+ 새 목표 세우기");
   add.onclick = startWizard;
   view.append(add);
@@ -366,35 +541,34 @@ function renderGoals(view) {
 }
 
 function goalCard(g) {
+  const persist = () => { saveGoals(); render(); };
   const card = el("article", "card goal");
   const top = el("div", "goal-top");
   top.append(el("span", "tag", g.kind), el("span", "muted-sm", g.area), el("span", "dday" + (daysLeft(g.deadline) < 0 ? " over" : ""), dday(g.deadline)));
   card.append(top, el("h2", null, g.summary));
-  card.append(el("p", "goal-meta", `${fmtDate(g.deadline)}까지${g.why ? " · " + g.why : ""}`));
+  card.append(el("p", "goal-meta", `${fmtDate(g.deadline)}까지 · 최근 14일 ${recentRecord(g)}`));
 
-  if (g.milestones?.length) {
-    const ms = el("ol", "milestones");
-    g.milestones.forEach((m) => {
-      const li = el("li", daysLeft(m.date) < 0 ? "past" : "");
-      li.append(el("span", "ms-date", fmtDate(m.date).slice(5)), el("span", null, m.title));
-      ms.append(li);
-    });
-    card.append(ms);
-  }
+  if (g.milestones?.length) card.append(milestoneList(g.milestones));
 
-  const items = g.backlog.filter((t) => isAvailable(t, dateKey()));
-  card.append(el("p", "label-sm", "오늘 할 일에 추가"));
-  const wrap = el("div", "chips");
-  if (!items.length) wrap.append(el("span", "muted", "추가할 수 있는 항목을 모두 넣었습니다"));
-  items.forEach((t) => wrap.append(goalChip(g, t, dateKey())));
-  card.append(wrap);
+  card.append(el("p", "label-sm", "할 일 목록 · 문구를 누르면 수정"));
+  card.append(itemList(g.backlog, {
+    onChange: persist,
+    extra: (item) => {
+      if (!isAvailable(item, dateKey())) {
+        const today = dayData(dateKey()).tasks.some((t) => !t.moved && t.goalItem === item.id);
+        return el("span", "added", today || !item.lastAdded ? "오늘 추가됨" : `${fmtDate(item.lastAdded).slice(5)} 추가함`);
+      }
+      const b = el("button", "small-btn today", "+ 오늘");
+      b.title = "오늘 할 일에 추가";
+      b.onclick = () => { addFromGoal(g, item, dateKey()); render(); };
+      return b;
+    },
+  }));
+  card.append(addItemForm(g.backlog, persist));
 
   const actions = el("div", "goal-actions");
-  if (aiMode()) {
-    const again = el("button", "small-btn", "AI 추천 다시 받기");
-    again.onclick = () => regenerate(g);
-    actions.append(again);
-  }
+  const talk = el("button", "small-btn solid", "이어서 대화하기");
+  talk.onclick = () => continueGoal(g);
   const del = el("button", "small-btn ghost-danger", "삭제");
   del.onclick = () => { // 한 번 더 눌러야 삭제 (실수 방지)
     if (!del.classList.contains("confirming")) {
@@ -405,20 +579,34 @@ function goalCard(g) {
     }
     goals = goals.filter((x) => x !== g); saveGoals(); render();
   };
-  actions.append(del);
+  actions.append(del, talk);
   card.append(actions);
   return card;
+}
+
+function milestoneList(milestones) {
+  const ms = el("ol", "milestones");
+  milestones.forEach((m) => {
+    const li = el("li", daysLeft(m.date) < 0 ? "past" : "");
+    li.append(el("span", "ms-date", fmtDate(m.date).slice(5)), el("span", null, m.title));
+    ms.append(li);
+  });
+  return ms;
 }
 
 function renderWizard(view) {
   const head = el("div", "wizard-head");
   head.append(el("span", "muted-sm", AI_LABEL[aiMode()] || "기본 추천"));
-  const cancel = el("button", "link", "취소");
-  cancel.onclick = () => { wizard = null; render(); };
-  head.append(cancel);
+  const back = el("button", "link", wizard.mode === "continue" ? "목록으로" : "취소");
+  back.onclick = () => { wizard = null; editingItem = null; render(); };
+  head.append(back);
   view.append(head);
 
   const chat = el("div", "chat");
+  if (wizard.history?.length) {
+    wizard.history.forEach((m) => chat.append(el("div", `bubble ${m.from} old`, m.text)));
+    chat.append(el("p", "chat-divider", "이어서 대화"));
+  }
   wizard.chat.forEach((m) => chat.append(el("div", "bubble " + m.from, m.text)));
   if (wizard.busy) {
     const b = el("div", "bubble bot typing");
@@ -428,8 +616,18 @@ function renderWizard(view) {
   view.append(chat);
 
   if (wizard.busy) return;
-  if (wizard.plan) return view.append(planCard());
-  if (wizard.followUp) return view.append(textForm("답변 입력", answerFollowUp, false));
+  if (wizard.plan) {
+    view.append(planCard());
+    if (wizard.mode === "continue") view.append(textForm("더 이야기하기", sendMessage, false, false));
+    return;
+  }
+  if (wizard.followUp) return view.append(textForm("답변 입력", sendMessage, false));
+  if (wizard.mode === "continue") {
+    const starters = el("div", "chips answer");
+    CONTINUE_STARTERS.forEach((s) => { const b = el("button", "chip", s); b.onclick = () => sendMessage(s); starters.append(b); });
+    view.append(starters, textForm("직접 입력", sendMessage, false));
+    return;
+  }
 
   const q = QUESTIONS[wizard.i];
   if (q.type === "chips") {
@@ -457,12 +655,12 @@ function renderWizard(view) {
   }
 }
 
-function textForm(placeholder, onDone, optional) {
+function textForm(placeholder, onDone, optional, autofocus = true) {
   const form = el("form", "answer-form card");
   const input = el("input");
   input.placeholder = placeholder || "";
-  input.maxLength = 200;
-  form.append(input, el("button", "primary", "다음"));
+  input.maxLength = 300;
+  form.append(input, el("button", "primary", "보내기"));
   form.onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); if (v) onDone(v); };
   const wrap = el("div");
   wrap.append(form);
@@ -471,39 +669,40 @@ function textForm(placeholder, onDone, optional) {
     skip.onclick = () => onDone("");
     wrap.append(skip);
   }
-  setTimeout(() => input.focus());
+  if (autofocus) setTimeout(() => input.focus());
   return wrap;
 }
 
 function planCard() {
-  const p = wizard.plan;
+  const w = wizard, p = w.plan;
+  const cont = w.mode === "continue";
   const card = el("div", "card plan");
-  card.append(el("p", "label-sm", p.source === "ai" ? "AI 추천 계획" : "기본 추천 계획"), el("h2", null, p.goal_summary));
+  card.append(el("p", "label-sm", (p.source === "ai" ? "AI " : "기본 ") + (cont ? "조정 제안" : "추천 계획")));
+  if (!cont || p.goal_summary) card.append(el("h2", null, p.goal_summary || w.answers.title));
+  if (cont && p.deadline) card.append(el("p", "goal-meta", `기한 변경: ${fmtDate(w.answers.deadline)} → ${fmtDate(p.deadline)}`));
 
-  card.append(el("p", "label-sm", "중간 목표"));
-  const ms = el("ol", "milestones");
-  p.milestones.forEach((m) => { const li = el("li"); li.append(el("span", "ms-date", fmtDate(m.date).slice(5)), el("span", null, m.title)); ms.append(li); });
-  card.append(ms);
+  if (p.milestones.length) {
+    card.append(el("p", "label-sm", cont ? "중간 목표 변경 제안" : "중간 목표"));
+    card.append(milestoneList(p.milestones));
+    if (cont) {
+      const lab = el("label", "pick-toggle");
+      const box = el("input");
+      box.type = "checkbox";
+      box.checked = p.useMilestones;
+      box.onchange = () => { p.useMilestones = box.checked; };
+      lab.append(box, el("span", null, "중간 목표도 이렇게 바꾸기"));
+      card.append(lab);
+    }
+  }
 
-  card.append(el("p", "label-sm", "추천 할 일 — 필요한 것만 남기세요"));
-  const list = el("div", "pick-list");
-  p.tasks.forEach((t, i) => {
-    const row = el("label", "pick");
-    const box = el("input");
-    box.type = "checkbox";
-    box.checked = p.picked[i];
-    box.onchange = () => { p.picked[i] = box.checked; };
-    const text = el("span", "pick-text");
-    text.append(el("i", "dot " + t.priority), el("span", null, t.text));
-    row.append(box, text, el("small", "cadence", (t.first ? "첫 할 일 · " : "") + CADENCE[t.cadence]));
-    list.append(row);
-  });
-  card.append(list);
+  card.append(el("p", "label-sm", (cont ? "새로 추가할 할 일" : "추천 할 일") + " · 필요 없는 건 ✕, 문구는 눌러서 수정"));
+  card.append(itemList(p.tasks, { onChange: render, extra: (t) => (t.first ? el("span", "added", "첫 할 일") : null) }));
+  card.append(addItemForm(p.tasks, render));
 
-  const save1 = el("button", "primary block", "저장하고 첫 할 일을 오늘에 추가");
-  save1.onclick = () => saveGoal(true);
-  const save2 = el("button", "small-btn block", "목표만 저장");
-  save2.onclick = () => saveGoal(false);
+  const save1 = el("button", "primary block", cont ? "목표에 반영하고 매일 할 일을 오늘에 추가" : "저장하고 첫 할 일을 오늘에 추가");
+  save1.onclick = () => savePlan(true);
+  const save2 = el("button", "small-btn block", cont ? "목표에만 반영" : "목표만 저장");
+  save2.onclick = () => savePlan(false);
   card.append(save1, save2);
   return card;
 }
