@@ -8,7 +8,7 @@
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) { color-scheme: dark;
     --bg: #0f1115; --card: #171a21; --text: #e8eaed; --sub: #c4c8cf; --muted: #8b919c; --faint: #5f6570;
     --line: #262a33; --line-soft: #1d2028;
     --accent: #9db8e0; --accent-soft: #1b2433;
@@ -17,6 +17,14 @@
     --low:  #9aa4b2; --low-soft:  #1e222a;
   }
 }
+:root[data-theme="dark"] { color-scheme: dark;
+    --bg: #0f1115; --card: #171a21; --text: #e8eaed; --sub: #c4c8cf; --muted: #8b919c; --faint: #5f6570;
+    --line: #262a33; --line-soft: #1d2028;
+    --accent: #9db8e0; --accent-soft: #1b2433;
+    --high: #f0857a; --high-soft: #2a1a1a;
+    --mid:  #e3a35c; --mid-soft:  #2a2117;
+    --low:  #9aa4b2; --low-soft:  #1e222a;
+  }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5;
@@ -218,3 +226,7 @@ h3.first { margin-top: 0; }
 .pick input { width: 16px; height: 16px; flex: none; accent-color: var(--accent); margin: 0; }
 .pick-text { flex: 1; display: flex; align-items: center; gap: 8px; }
 .plan .primary.block { margin-top: 16px; }
+a.small-btn, a.cal { display: inline-block; text-align: center; text-decoration: none; }
+a.wide-outline { display: block; }
+.confirming { background: var(--high); color: var(--card); border-color: var(--high); }
+.form-error { margin: 8px 0 0; font-size: 12px; color: var(--high); }

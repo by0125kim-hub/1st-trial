@@ -3,7 +3,8 @@
 //  문답으로 목표와 기한을 정리하고, 이루기 위한 할 일을 추천받아
 //  매일의 계획(01 작성)에 넣을 수 있게 해요.
 //  - 기본: 앱에 내장된 분야별 추천 (무료)
-//  - API 키를 넣으면: Claude AI 코치가 추가 질문 후 맞춤 추천
+//  - Claude 안(아티팩트)에서 열면: 로그인한 Claude 계정(Pro 등)의 사용량으로 AI 코치
+//  - 그 밖에서 API 키를 넣으면: Anthropic API로 AI 코치
 //  ※ 이 파일은 app.js보다 먼저 불러와요. app.js의 함수들은 함수 안에서만 사용해요.
 // =========================================================
 
@@ -89,6 +90,15 @@ const SDK_URL = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.4.0/+esm";
 const AI_MODEL = "claude-opus-5-5";
 const MAX_FOLLOW_UPS = 2;
 
+// ---- AI 연결 방식 고르기 ----
+// Claude 안에서 열렸으면 "sample" 기능으로 내 Claude 계정 사용량을 써요.
+let claudeSample = null;
+if (window.claude?.use) {
+  claude.use("sample").then((s) => { claudeSample = s; if (s) render(); }).catch(() => {});
+}
+const aiMode = () => (claudeSample ? "claude" : settings.apiKey ? "api" : null);
+const AI_LABEL = { claude: "AI 코치 · 내 Claude 계정", api: "AI 코치 · API 키" };
+
 const COACH_PROMPT = `당신은 바쁜 전문직 종사자의 목표 달성을 돕는 코치입니다. 사용자가 문답으로 답한 목표 정보를 받아, 기한 안에 이룰 수 있는 실행 계획을 한국어로 제안합니다.
 
 진행 방식:
@@ -121,6 +131,10 @@ const PLAN_SCHEMA = {
   },
 };
 
+// Claude 계정 방식은 형식 지정 기능이 없어서, 원하는 JSON 모양을 글로 알려줘요
+const JSON_FORMAT = `다른 글 없이 아래 형식의 JSON 객체 하나로만 답하세요.
+{"status":"ask 또는 plan","message":"짧은 코멘트","question":"추가 질문(ask일 때만, 아니면 빈 문자열)","goal_summary":"다듬은 목표 한 문장","milestones":[{"title":"중간 목표","date":"YYYY-MM-DD"}],"tasks":[{"text":"할 일","cadence":"once 또는 daily 또는 weekly","priority":"high 또는 mid 또는 low","first":true}]}`;
+
 function describeAnswers(a, followUpsLeft) {
   return [
     `오늘 날짜: ${dateKey()}`,
@@ -135,7 +149,31 @@ function describeAnswers(a, followUpsLeft) {
   ].join("\n");
 }
 
-async function askCoach(convo) {
+// 내 Claude 계정으로 묻기 (Claude 안에서 열었을 때)
+const SAMPLE_ERRORS = {
+  not_granted: "Claude 사용을 허용하지 않았습니다.",
+  sampling_disabled: "이 계정에서는 Claude를 사용할 수 없습니다.",
+  rate_limited: "Claude 사용 한도에 도달했거나 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+  session_expired: "Claude에 다시 로그인해 주세요.",
+  refused: "Claude가 이 요청에 답하지 않았습니다.",
+  invalid_json: "Claude 응답을 읽지 못했습니다.",
+};
+async function askClaudeAccount(turns) {
+  let out;
+  try {
+    out = await claudeSample.json(turns, { modelTier: "default", cache: false });
+  } catch (err) {
+    throw new Error(SAMPLE_ERRORS[err?.code] || "Claude 응답을 받지 못했습니다.");
+  }
+  if (!out || typeof out !== "object") throw new Error("Claude 응답을 읽지 못했습니다.");
+  out.milestones = Array.isArray(out.milestones) ? out.milestones : [];
+  out.tasks = Array.isArray(out.tasks) ? out.tasks : [];
+  turns.push({ role: "assistant", content: JSON.stringify(out) });
+  return out;
+}
+
+// API 키로 묻기
+async function askApi(convo) {
   const { default: Anthropic } = await import(SDK_URL);
   const client = new Anthropic({ apiKey: settings.apiKey, dangerouslyAllowBrowser: true });
   let res;
@@ -171,7 +209,7 @@ async function askCoach(convo) {
 const questionText = (q) => (typeof q.q === "function" ? q.q(wizard.answers) : q.q);
 
 function startWizard() {
-  wizard = { i: 0, answers: {}, chat: [], convo: [], asks: 0, busy: false, plan: null, followUp: false, forced: false };
+  wizard = { i: 0, answers: {}, chat: [], convo: [], turns: [], asks: 0, busy: false, plan: null, followUp: false, forced: false };
   wizard.chat.push({ from: "bot", text: questionText(QUESTIONS[0]) });
   render();
 }
@@ -189,22 +227,32 @@ function answer(value, label) {
   }
 }
 
+// 두 연결 방식의 대화 기록에 똑같이 사용자 말을 덧붙여요
+function addUserTurn(w, content) {
+  w.convo.push({ role: "user", content });
+  w.turns.push({ role: "user", content });
+}
+
 function answerFollowUp(text) {
   wizard.chat.push({ from: "me", text });
-  wizard.convo.push({ role: "user", content: `${text}\n\n(남은 추가 질문 횟수: ${MAX_FOLLOW_UPS - wizard.asks})` });
+  addUserTurn(wizard, `${text}\n\n(남은 추가 질문 횟수: ${MAX_FOLLOW_UPS - wizard.asks})`);
   wizard.followUp = false;
   makePlan();
 }
 
 async function makePlan() {
   const a = wizard.answers;
-  if (!settings.apiKey) return showPlan(builtinPlan(a), "builtin");
+  const mode = aiMode();
+  if (!mode) return showPlan(builtinPlan(a), "builtin");
 
   const w = wizard;
   w.busy = true; render();
-  if (!w.convo.length) w.convo.push({ role: "user", content: describeAnswers(a, MAX_FOLLOW_UPS) });
+  if (!w.convo.length) {
+    w.convo.push({ role: "user", content: describeAnswers(a, MAX_FOLLOW_UPS) });
+    w.turns.push({ role: "user", content: `${COACH_PROMPT}\n\n${JSON_FORMAT}\n\n${describeAnswers(a, MAX_FOLLOW_UPS)}` });
+  }
   try {
-    const out = await askCoach(w.convo);
+    const out = mode === "claude" ? await askClaudeAccount(w.turns) : await askApi(w.convo);
     if (wizard !== w) return; // 기다리는 동안 사용자가 취소함
     w.busy = false;
     if (out.status === "ask" && out.question) {
@@ -216,7 +264,7 @@ async function makePlan() {
       }
       if (!w.forced) { // 질문 횟수를 다 썼는데 또 질문하면 계획을 요청
         w.forced = true;
-        w.convo.push({ role: "user", content: "추가 질문 없이 지금까지의 정보로 계획을 만들어 주세요." });
+        addUserTurn(w, "추가 질문 없이 지금까지의 정보로 계획을 만들어 주세요.");
         return makePlan();
       }
     }
@@ -240,7 +288,7 @@ function showPlan(plan, source) {
 function regenerate(goal) {
   const answers = { kind: goal.kind, title: goal.title, why: goal.why, area: goal.area, deadline: goal.deadline, current: goal.current, time: goal.time };
   wizard = { i: QUESTIONS.length, answers, chat: [{ from: "bot", text: `'${goal.title}'의 추천을 다시 받습니다.` }],
-    convo: [], asks: 0, busy: false, plan: null, followUp: false, forced: false, replacing: goal.id };
+    convo: [], turns: [], asks: 0, busy: false, plan: null, followUp: false, forced: false, replacing: goal.id };
   makePlan();
 }
 
@@ -342,14 +390,19 @@ function goalCard(g) {
   card.append(wrap);
 
   const actions = el("div", "goal-actions");
-  if (settings.apiKey) {
+  if (aiMode()) {
     const again = el("button", "small-btn", "AI 추천 다시 받기");
     again.onclick = () => regenerate(g);
     actions.append(again);
   }
   const del = el("button", "small-btn ghost-danger", "삭제");
-  del.onclick = () => {
-    if (!confirm(`'${g.summary}' 목표를 삭제할까요?`)) return;
+  del.onclick = () => { // 한 번 더 눌러야 삭제 (실수 방지)
+    if (!del.classList.contains("confirming")) {
+      del.classList.add("confirming");
+      del.textContent = "한 번 더 누르면 삭제";
+      setTimeout(() => { del.classList.remove("confirming"); del.textContent = "삭제"; }, 3000);
+      return;
+    }
     goals = goals.filter((x) => x !== g); saveGoals(); render();
   };
   actions.append(del);
@@ -359,7 +412,7 @@ function goalCard(g) {
 
 function renderWizard(view) {
   const head = el("div", "wizard-head");
-  head.append(el("span", "muted-sm", settings.apiKey ? "AI 코치 · Claude" : "기본 추천"));
+  head.append(el("span", "muted-sm", AI_LABEL[aiMode()] || "기본 추천"));
   const cancel = el("button", "link", "취소");
   cancel.onclick = () => { wizard = null; render(); };
   head.append(cancel);
@@ -458,6 +511,12 @@ function planCard() {
 function aiSettingsCard() {
   const card = el("div", "card ai-card");
   const head = el("div", "goal-top");
+  if (claudeSample) { // Claude 안에서 열린 경우: 키가 필요 없어요
+    head.append(el("strong", null, "AI 코치"), el("span", "tag on", "내 Claude 계정"));
+    card.append(head, el("p", "muted-sm",
+      "Claude 안에서 열려 있어 로그인한 Claude 계정의 사용량으로 AI 코치가 동작합니다. 처음 사용할 때 한 번 허용을 묻습니다."));
+    return card;
+  }
   head.append(el("strong", null, "AI 코치"), el("span", "tag" + (settings.apiKey ? " on" : ""), settings.apiKey ? "사용 중" : "꺼짐"));
   card.append(head);
   card.append(el("p", "muted-sm",
@@ -481,7 +540,10 @@ function aiSettingsCard() {
     form.onsubmit = (e) => {
       e.preventDefault();
       const v = input.value.trim();
-      if (!v.startsWith("sk-ant-")) return alert("Anthropic API 키는 sk-ant- 로 시작합니다.");
+      if (!v.startsWith("sk-ant-")) {
+        card.querySelector(".form-error")?.remove();
+        return form.after(el("p", "form-error", "Anthropic API 키는 sk-ant- 로 시작합니다."));
+      }
       settings.apiKey = v; saveSettings(); render();
     };
     card.append(form);

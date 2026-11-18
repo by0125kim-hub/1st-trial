@@ -68,39 +68,44 @@ const saveSettings = () => { try { localStorage.setItem("planner-settings", JSON
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const compact = (key) => key.replaceAll("-", "");                    // 2026-11-18 → 20261118
 const stamp = (key, h, m = 0) => `${compact(key)}T${pad(h)}${pad(m)}00`; // → 20261118T090000
-const appLink = () => (location.protocol.startsWith("http") ? "\n\n" + location.href.split("#")[0] : "");
+// 앱 주소를 일정 설명에 넣어요 (Claude 안에서 열었을 땐 넣지 않음)
+const appLink = () => (location.protocol.startsWith("http") && !window.claude ? "\n\n" + location.href.split("#")[0] : "");
 
-function openCalendar({ title, start, end, details, recur }) {
+function calendarUrl({ title, start, end, details, recur }) {
   const params = new URLSearchParams({ action: "TEMPLATE", text: title, dates: `${start}/${end}`, details: details + appLink(), ctz: TZ });
   if (recur) params.set("recur", recur);
-  window.open("https://calendar.google.com/calendar/render?" + params, "_blank");
+  return "https://calendar.google.com/calendar/render?" + params;
+}
+
+// 버튼 모양의 링크: 누르면 새 탭에서 구글 캘린더 "일정 추가" 화면이 열려요
+function calLink(cls, label, info, afterOpen) {
+  const a = el("a", cls, label);
+  a.href = calendarUrl(info);
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.onclick = (e) => { e.stopPropagation(); setTimeout(afterOpen); }; // 링크가 열린 다음에 화면 갱신
+  return a;
 }
 
 // 1) 시간표 블록 하나를 캘린더 일정으로
-function addTaskToCalendar(t) {
-  openCalendar({
-    title: t.text,
-    start: stamp(day, t.slot),
-    end: stamp(day, t.slot + 1),
-    details: `우선순위: ${PRIORITY[t.priority] || "미지정"}\nDaily Plan에서 추가한 일정입니다.`,
-  });
-  t.synced = true; save(); render();
-}
+const taskEvent = (t) => ({
+  title: t.text,
+  start: stamp(day, t.slot),
+  end: stamp(day, t.slot + 1),
+  details: `우선순위: ${PRIORITY[t.priority] || "미지정"}\nDaily Plan에서 추가한 일정입니다.`,
+});
 
 // 2) 매일 반복되는 "하루 리뷰" 알림 일정
-function addReviewReminder() {
-  openCalendar({
-    title: "하루 리뷰 · Daily Plan",
-    start: stamp(dateKey(), REMINDER.h, REMINDER.m),
-    end: stamp(shiftDay(dateKey(), 1), 0, 0), // 자정까지
-    details: "오늘 계획한 항목의 완료 여부를 점검하고, 미완료 항목은 완료 처리하거나 내일로 이월하세요.",
-    recur: "RRULE:FREQ=DAILY",
-  });
-  settings.reminder = REMINDER.label; saveSettings(); render();
-}
+const reminderEvent = () => ({
+  title: "하루 리뷰 · Daily Plan",
+  start: stamp(dateKey(), REMINDER.h, REMINDER.m),
+  end: stamp(shiftDay(dateKey(), 1), 0, 0), // 자정까지
+  details: "오늘 계획한 항목의 완료 여부를 점검하고, 미완료 항목은 완료 처리하거나 내일로 이월하세요.",
+  recur: "RRULE:FREQ=DAILY",
+});
 
 // 3) 마감한 하루 리뷰 결과를 그날의 종일 일정으로 기록
-function logReviewToCalendar(d) {
+function reviewEvent(d) {
   const tasks = active(d);
   const done = tasks.filter((t) => t.done);
   const moved = d.tasks.filter((t) => t.moved);
@@ -108,13 +113,7 @@ function logReviewToCalendar(d) {
   if (done.length) lines.push("", "[완료]", ...done.map((t) => "· " + t.text));
   if (moved.length) lines.push("", "[내일로 이월]", ...moved.map((t) => "· " + t.text));
   if (d.note) lines.push("", "[회고]", d.note);
-  openCalendar({
-    title: `하루 리뷰 · ${done.length}/${tasks.length} 완료`,
-    start: compact(day),
-    end: compact(shiftDay(day, 1)),
-    details: lines.join("\n"),
-  });
-  d.reviewSynced = true; save(); render();
+  return { title: `하루 리뷰 · ${done.length}/${tasks.length} 완료`, start: compact(day), end: compact(shiftDay(day, 1)), details: lines.join("\n") };
 }
 
 // 리뷰 알림 등록 안내 카드
@@ -123,9 +122,8 @@ function reminderCard() {
   const text = el("p");
   text.append(el("strong", null, `매일 ${REMINDER.label} 리뷰 알림`),
     "구글 캘린더에 반복 일정으로 등록하면 앱을 닫아도 알림을 받을 수 있습니다.");
-  const btn = el("button", "small-btn solid", "캘린더에 등록");
-  btn.onclick = addReviewReminder;
-  card.append(text, btn);
+  card.append(text, calLink("small-btn solid", "캘린더에 등록", reminderEvent(),
+    () => { settings.reminder = REMINDER.label; saveSettings(); render(); }));
   return card;
 }
 
@@ -270,9 +268,9 @@ function renderSchedule(view, d) {
       const check = el("button", "check", t.done ? "✓" : "");
       check.title = "완료";
       check.onclick = (e) => { e.stopPropagation(); t.done = !t.done; save(); render(); };
-      const cal = el("button", "cal" + (t.synced ? " on" : ""), t.synced ? "✓ 캘린더" : "+ 캘린더");
+      const cal = calLink("cal" + (t.synced ? " on" : ""), t.synced ? "✓ 캘린더" : "+ 캘린더", taskEvent(t),
+        () => { t.synced = true; save(); render(); });
       cal.title = "구글 캘린더에 추가";
-      cal.onclick = (e) => { e.stopPropagation(); addTaskToCalendar(t); };
       const remove = el("button", "mini-x", "✕");
       remove.title = "시간표에서 빼기";
       remove.onclick = (e) => { e.stopPropagation(); t.slot = null; t.synced = false; save(); render(); };
@@ -369,9 +367,8 @@ function renderReview(view, d) {
 
   // 마감한 뒤에는 리뷰 결과를 캘린더에 남길 수 있어요
   if (d.reviewed) {
-    const log = el("button", "small-btn wide-outline", d.reviewSynced ? "✓ 캘린더에 기록됨 · 다시 기록" : "리뷰 결과를 구글 캘린더에 기록");
-    log.onclick = () => logReviewToCalendar(d);
-    view.append(log);
+    view.append(calLink("small-btn wide-outline", d.reviewSynced ? "✓ 캘린더에 기록됨 · 다시 기록" : "리뷰 결과를 구글 캘린더에 기록",
+      reviewEvent(d), () => { d.reviewSynced = true; save(); render(); }));
   }
   if (settings.reminder !== REMINDER.label) view.append(reminderCard());
 }
