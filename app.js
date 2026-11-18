@@ -131,6 +131,7 @@ function reminderCard() {
 let day = dateKey();   // 보고 있는 날짜
 let step = 1;          // 보고 있는 단계
 let picked = null;     // 3단계에서 시간대에 넣으려고 고른 할 일
+let editingId = null;  // 01 작성에서 고치는 중인 할 일
 
 const isToday = () => day === dateKey();
 const isEvening = () => { const h = new Date().getHours(); return isToday() && (h >= EVENING_HOUR || h < DAY_START_HOUR); };
@@ -197,22 +198,155 @@ function renderWrite(view, d) {
     if (!text) return;
     d.tasks.push({ id: uid(), text, priority: null, slot: null, done: false });
     save(); render();
-    $("view").querySelector("input").focus(); // 계속 이어서 적을 수 있게
+    $("view").querySelector(".add input").focus(); // 계속 이어서 적을 수 있게
   };
   view.append(form);
 
   const tasks = active(d);
-  if (!tasks.length) return view.append(el("p", "empty", "등록된 항목이 없습니다"));
+  if (!tasks.length) {
+    view.append(el("p", "empty", "등록된 항목이 없습니다"));
+    if (d.tasks.length || d.note || d.reviewed) view.append(resetDayButton()); // 이월 기록·회고만 남은 경우
+    return;
+  }
   const ul = el("ul", "list");
   tasks.forEach((t) => {
     const li = el("li", "row");
+    li.dataset.drop = "row"; // 다른 줄을 이 위·아래로 끌어 놓을 수 있게
+    li.dataset.id = t.id;
+
+    const grip = el("span", "grip", "⠿");
+    grip.title = "끌어서 순서 바꾸기";
+    enableDrag(grip, li, (target, before) => moveTask(d, t.id, target.id, before));
+
+    const edit = el("button", "icon", "✎");
+    edit.title = "수정";
+    edit.onclick = () => { editingId = t.id; render(); };
     const del = el("button", "icon", "✕");
     del.title = "삭제";
     del.onclick = () => { d.tasks = d.tasks.filter((x) => x !== t); save(); render(); };
-    li.append(titleEl(t), del);
+
+    li.append(grip, editingId === t.id ? editField(t) : titleEl(t), edit, del);
     ul.append(li);
   });
   view.append(ul);
+  view.append(el("p", "hint gap", "⠿ 를 끌어서 순서를 바꾸고, ✎ 로 내용을 고칠 수 있습니다."));
+  view.append(resetDayButton());
+}
+
+// 두 번 눌러야 실행되는 버튼 (실수 방지)
+function confirmButton(cls, label, confirmLabel, onConfirm) {
+  const b = el("button", cls, label);
+  b.onclick = () => {
+    if (!b.classList.contains("confirming")) {
+      b.classList.add("confirming");
+      b.textContent = confirmLabel;
+      setTimeout(() => { b.classList.remove("confirming"); b.textContent = label; }, 3000);
+      return;
+    }
+    onConfirm();
+  };
+  return b;
+}
+
+// 보고 있는 날짜 초기화: 무엇을 지울지 고르는 패널
+let resetOpen = false;   // 선택지가 펼쳐져 있는지
+let resetNote = "";      // 방금 한 일 안내
+
+const RESET_OPTIONS = [
+  { label: "시간 배치만 비우기", desc: "할 일은 그대로 두고 시간표에서만 뺍니다",
+    run: (d) => d.tasks.forEach((t) => { t.slot = null; t.synced = false; }), done: "시간 배치를 비웠습니다." },
+  { label: "완료 표시만 지우기", desc: "체크한 할 일을 모두 미완료로 되돌립니다",
+    run: (d) => { d.tasks.forEach((t) => { t.done = false; }); d.reviewed = false; }, done: "완료 표시를 지웠습니다." },
+  { label: "회고·마감만 지우기", desc: "회고 글과 하루 마감 상태를 지웁니다",
+    run: (d) => { d.note = ""; d.reviewed = false; d.reviewSynced = false; }, done: "회고와 마감 상태를 지웠습니다." },
+];
+
+function resetDayButton() {
+  const wrap = el("div", "reset-day");
+  const toggle = el("button", "small-btn", resetOpen ? "닫기" : "이 날 초기화…");
+  toggle.onclick = () => { resetOpen = !resetOpen; resetNote = ""; render(); };
+  wrap.append(toggle);
+  if (!resetOpen) return wrap;
+
+  const panel = el("div", "reset-panel card");
+  panel.append(el("p", "label-sm", `${toDate(day).toLocaleDateString("ko-KR", { month: "long", day: "numeric" })} — 무엇을 초기화할까요?`));
+  const d = dayData(day);
+  RESET_OPTIONS.forEach((o) => {
+    const row = el("div", "reset-row");
+    const text = el("p");
+    text.append(el("strong", null, o.label), el("span", null, o.desc));
+    const b = el("button", "small-btn", "실행");
+    b.onclick = () => { o.run(d); resetNote = o.done; save(); render(); };
+    row.append(text, b);
+    panel.append(row);
+  });
+  const row = el("div", "reset-row");
+  const text = el("p");
+  text.append(el("strong", null, "전체 초기화"), el("span", null, "할 일, 시간 배치, 완료, 회고까지 이 날의 기록을 모두 지웁니다"));
+  row.append(text, confirmButton("small-btn ghost-danger", "모두 지우기", "한 번 더 누르면 삭제", resetDay));
+  panel.append(row);
+  if (resetNote) panel.append(el("p", "reset-note", resetNote));
+  wrap.append(panel);
+  return wrap;
+}
+
+function resetDay() {
+  const d = db[day];
+  // 이 날 목표에서 가져온 1회성 할 일은 다시 가져올 수 있게 되돌려요
+  const items = goals.flatMap((g) => g.backlog);
+  for (const t of d?.tasks || []) {
+    const item = t.goalItem && items.find((x) => x.id === t.goalItem);
+    if (item && item.lastAdded === day) delete item.lastAdded;
+  }
+  delete db[day];
+  editingId = null;
+  picked = null;
+  resetNote = "이 날의 기록을 모두 지웠습니다.";
+  save(); saveGoals(); render();
+}
+
+// 할 일 문구 고치기 (Enter 저장, Esc 취소)
+function editField(t) {
+  const input = el("input", "edit-input");
+  input.value = t.text;
+  input.maxLength = 100;
+  let closed = false;
+  const finish = (keep) => {
+    if (closed) return;
+    closed = true;
+    const v = input.value.trim();
+    if (keep && v) { t.text = v; t.synced = false; save(); }
+    editingId = null;
+    render();
+  };
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+  };
+  input.onblur = () => finish(true);
+  setTimeout(() => { input.focus(); input.select(); });
+  return input;
+}
+
+// 끌어 놓은 위치로 순서 바꾸기
+function moveTask(d, fromId, toId, before) {
+  if (fromId === toId) return;
+  const from = d.tasks.findIndex((x) => x.id === fromId);
+  if (from < 0) return;
+  const [t] = d.tasks.splice(from, 1);
+  const to = d.tasks.findIndex((x) => x.id === toId);
+  d.tasks.splice(to < 0 ? from : before ? to : to + 1, 0, t);
+  save(); render();
+}
+
+// 시간표에서 끌어 놓았을 때: 시간대 또는 "미배치"로
+function dropOnSchedule(t, target) {
+  if (target.drop === "slot") t.slot = Number(target.hour);
+  else if (target.drop === "pool") t.slot = null;
+  else return;
+  t.synced = false; // 시간이 바뀌었으니 캘린더에 다시 추가할 수 있게
+  picked = null;
+  save(); render();
 }
 
 // ---- 2. 우선순위 ----
@@ -244,15 +378,17 @@ function renderSchedule(view, d) {
   const unplaced = tasks.filter((t) => t.slot == null).sort(byPriority);
   view.append(el("p", "hint", picked
     ? "배치할 시간대를 선택하세요."
-    : "항목을 선택한 뒤 시간대를 누르세요. 우선순위가 높은 일은 집중도가 높은 시간에 두는 것이 좋습니다."));
+    : "항목을 시간대로 끌어다 놓거나, 항목을 누른 뒤 시간대를 누르세요. 우선순위가 높은 일은 집중도가 높은 시간에 두는 것이 좋습니다."));
 
   // 아직 시간이 정해지지 않은 할 일들
   const pool = el("div", "pool card" + (unplaced.length ? " sticky" : ""));
+  pool.dataset.drop = "pool"; // 시간표의 일정을 여기로 끌어오면 배치 취소
   if (!unplaced.length) pool.append(el("span", "muted", tasks.length ? "모든 항목이 배치되었습니다" : "01 작성 단계에서 항목을 먼저 입력하세요"));
   unplaced.forEach((t) => {
     const chip = el("button", `chip ${picked === t.id ? "picked" : ""}`);
     chip.append(el("i", "dot " + (t.priority || "")), el("span", null, t.text));
     chip.onclick = () => { picked = picked === t.id ? null : t.id; render(); };
+    enableDrag(chip, chip, (target) => dropOnSchedule(t, target));
     pool.append(chip);
   });
   view.append(pool);
@@ -262,6 +398,8 @@ function renderSchedule(view, d) {
   const nowHour = isToday() ? new Date().getHours() : -1;
   HOURS.forEach((h) => {
     const slot = el("div", `slot ${h === nowHour ? "now" : ""} ${picked ? "target" : ""}`);
+    slot.dataset.drop = "slot";
+    slot.dataset.hour = h;
     const box = el("div", "slot-tasks");
     tasks.filter((t) => t.slot === h).sort(byPriority).forEach((t) => {
       const chip = el("div", `event ${t.priority || ""} ${t.done ? "done" : ""}`);
@@ -274,7 +412,10 @@ function renderSchedule(view, d) {
       const remove = el("button", "mini-x", "✕");
       remove.title = "시간표에서 빼기";
       remove.onclick = (e) => { e.stopPropagation(); t.slot = null; t.synced = false; save(); render(); };
-      chip.append(check, el("span", null, t.text), cal, remove);
+      const grip = el("span", "grip", "⠿");
+      grip.title = "끌어서 다른 시간으로 옮기기";
+      enableDrag(grip, chip, (target) => dropOnSchedule(t, target));
+      chip.append(grip, check, el("span", null, t.text), cal, remove);
       box.append(chip);
     });
     slot.append(el("span", "hour", pad(h) + ":00"), box);
@@ -289,6 +430,7 @@ function renderSchedule(view, d) {
 
   view.append(el("p", "hint gap", "블록의 '+ 캘린더'를 누르면 구글 캘린더에 해당 시간의 일정이 채워진 채로 열립니다. 저장하면 캘린더 앱이 알림을 보내줍니다."));
   if (settings.reminder !== REMINDER.label) view.append(reminderCard());
+  view.append(resetDayButton());
 }
 
 // ---- 4. 마무리 ----
@@ -371,6 +513,7 @@ function renderReview(view, d) {
       reviewEvent(d), () => { d.reviewSynced = true; save(); render(); }));
   }
   if (settings.reminder !== REMINDER.label) view.append(reminderCard());
+  view.append(resetDayButton());
 }
 
 function moveToTomorrow(t) {
@@ -382,7 +525,7 @@ function moveToTomorrow(t) {
 // =========================================================
 //  버튼 연결
 // =========================================================
-function goDay(key) { day = key; picked = null; step = pickStep(); render(); }
+function goDay(key) { day = key; picked = null; resetOpen = false; step = pickStep(); render(); }
 $("prevDay").onclick = () => goDay(shiftDay(day, -1));
 $("nextDay").onclick = () => goDay(shiftDay(day, 1));
 $("todayBtn").onclick = () => goDay(dateKey());
@@ -390,13 +533,13 @@ $("goReview").onclick = () => { step = 4; render(); };
 $("steps").onclick = (e) => {
   const b = e.target.closest("button");
   if (!b) return;
-  step = +b.dataset.s; picked = null; render();
+  step = +b.dataset.s; picked = null; resetOpen = false; render();
 };
 $("next").onclick = () => { step = Math.min(4, step + 1); picked = null; render(); scrollTo({ top: 0, behavior: "smooth" }); };
 
 // 1분마다 "지금" 시간대와 밤 알림을 새로 고쳐요 (입력 중일 땐 건너뜀)
 setInterval(() => {
-  if (!["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) render();
+  if (!drag && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) render();
 }, 60_000);
 
 step = pickStep();
