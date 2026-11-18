@@ -128,6 +128,15 @@ h3 { margin: 28px 0 10px; font-size: 12px; font-weight: 700; letter-spacing: .06
 .check { width: 16px; height: 16px; flex: none; padding: 0; border-radius: 4px; border: 1.5px solid var(--faint);
   background: transparent; color: var(--card); font-size: 10px; font-weight: 800; line-height: 1; }
 .event.done .check { background: var(--accent); border-color: var(--accent); }
+.cal { flex: none; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); background: var(--card);
+  color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.cal:hover { color: var(--text); border-color: var(--muted); }
+.cal.on { background: transparent; border-color: transparent; color: var(--accent); }
+.hint.gap { margin-top: 14px; }
+.sync { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; padding: 14px 16px; }
+.sync p { margin: 0; font-size: 13px; color: var(--muted); }
+.sync strong { display: block; margin-bottom: 2px; color: var(--text); font-size: 14px; }
+.wide-outline { display: block; width: 100%; margin-top: 10px; padding: 12px; font-size: 14px; }
 .mini-x { background: transparent; color: var(--faint); font-size: 12px; padding: 2px 4px; }
 .mini-x:hover { color: var(--text); }
 
