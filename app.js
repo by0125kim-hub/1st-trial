@@ -1,6 +1,6 @@
 // =========================================================
 //  하루 계획 앱
-//  1. 적기 → 2. 우선순위 → 3. 시간 배분 → 4. 마무리
+//  0. 목표 → 1. 작성 → 2. 우선순위 → 3. 일정 배치 → 4. 하루 리뷰
 //  데이터는 날짜별로 이 브라우저(localStorage)에 저장돼요.
 // =========================================================
 
@@ -29,7 +29,11 @@ function el(tag, cls, text) {
 // 우선순위 색 점 + 제목
 function titleEl(t) {
   const title = el("span", "title");
-  title.append(el("i", "dot " + (t.priority || "")), el("span", null, t.text));
+  const body = el("span", "tbody");
+  body.append(el("span", null, t.text));
+  const goal = t.goalId && goals.find((g) => g.id === t.goalId);
+  if (goal) body.append(el("span", "goal-tag", "↳ " + goal.summary)); // 어느 목표에서 온 할 일인지
+  title.append(el("i", "dot " + (t.priority || "")), body);
   return title;
 }
 
@@ -137,7 +141,7 @@ const active = (d) => d.tasks.filter((t) => !t.moved); // 내일로 넘긴 건 �
 // 날짜를 열었을 때 어느 단계부터 보여줄지 정해요
 function pickStep() {
   const tasks = active(dayData(day));
-  if (!tasks.length) return 1;
+  if (!tasks.length) return goals.length ? 1 : 0; // 목표가 하나도 없으면 목표부터
   if (isEvening()) return 4;
   if (tasks.some((t) => !t.priority)) return 2;
   return 3;
@@ -163,7 +167,7 @@ function render() {
 
   // 단계 탭 + 빨간 숫자(할 게 남은 개수)
   const badges = [
-    "",
+    "", "",
     tasks.filter((t) => !t.priority).length,
     tasks.filter((t) => t.slot == null).length,
     tasks.length - doneN,
@@ -175,13 +179,14 @@ function render() {
 
   const view = $("view");
   view.innerHTML = "";
-  [null, renderWrite, renderPriority, renderSchedule, renderReview][step](view, d);
-  $("next").hidden = step === 4;
+  [renderGoals, renderWrite, renderPriority, renderSchedule, renderReview][step](view, d);
+  $("next").hidden = step === 4 || (step === 0 && !!wizard);
 }
 
 // ---- 1. 적기 ----
 function renderWrite(view, d) {
   view.append(el("p", "hint", "오늘 처리할 일을 순서 없이 모두 입력하세요."));
+  goalSuggestions(view); // 목표에서 추천받은 할 일
 
   const form = el("form", "add card");
   const input = el("input");
