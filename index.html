@@ -3,48 +3,38 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>할 일 목록</title>
+  <title>하루 계획</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main>
     <header>
       <div>
-        <p class="date" id="today"></p>
-        <h1>오늘의 할 일</h1>
+        <p class="label">하루 계획 <button id="todayBtn" class="link" hidden>오늘로 ↩</button></p>
+        <div class="daynav">
+          <button id="prevDay" class="icon" aria-label="이전 날">‹</button>
+          <h1 id="date"></h1>
+          <button id="nextDay" class="icon" aria-label="다음 날">›</button>
+        </div>
       </div>
-      <div class="ring" id="ring" aria-label="진행률"><span id="percent">0%</span></div>
+      <div class="ring" id="ring" aria-label="완료율"><span id="percent">0%</span></div>
     </header>
 
-    <form id="form" class="card">
-      <input id="input" placeholder="무엇을 해야 하나요?" autocomplete="off" maxlength="100">
-      <div class="options">
-        <input id="due" type="date" aria-label="마감일">
-        <select id="priority" aria-label="우선순위">
-          <option value="high">🔴 높음</option>
-          <option value="mid" selected>🟡 보통</option>
-          <option value="low">🟢 낮음</option>
-        </select>
-        <select id="category" aria-label="카테고리">
-          <option>일상</option><option>공부</option><option>업무</option><option>운동</option><option>쇼핑</option>
-        </select>
-        <button class="primary">추가</button>
-      </div>
-    </form>
+    <div id="banner" class="banner" hidden>
+      <span>🌙 자기 전, 오늘 할 일을 마무리했는지 확인해요</span>
+      <button id="goReview">확인하기</button>
+    </div>
 
-    <nav class="filters" id="filters">
-      <button data-f="all" class="active">전체</button>
-      <button data-f="active">진행중</button>
-      <button data-f="done">완료</button>
+    <nav id="steps" class="steps">
+      <button data-s="1"><b>1</b>적기<small></small></button>
+      <button data-s="2"><b>2</b>우선순위<small></small></button>
+      <button data-s="3"><b>3</b>시간 배분<small></small></button>
+      <button data-s="4"><b>4</b>마무리<small></small></button>
     </nav>
 
-    <ul id="list"></ul>
-    <p id="empty" class="empty" hidden>✨ 할 일이 없어요. 하나 추가해 볼까요?</p>
+    <section id="view"></section>
 
-    <footer>
-      <span id="count"></span>
-      <button id="clear" class="ghost">완료 항목 삭제</button>
-    </footer>
+    <button id="next" class="primary wide">다음 단계 →</button>
   </main>
   <script src="app.js"></script>
 </body>
