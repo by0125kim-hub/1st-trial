@@ -24,6 +24,12 @@ function el(tag, cls, text) {
   if (text != null) e.textContent = text;
   return e;
 }
+// 우선순위 색 점 + 제목
+function titleEl(t) {
+  const title = el("span", "title");
+  title.append(el("i", "dot " + (t.priority || "")), el("span", null, t.text));
+  return title;
+}
 
 // ---- 저장소 ----
 // db = { "2026-11-18": { tasks: [{ id, text, priority, slot, done, moved }], note, reviewed } }
@@ -70,11 +76,11 @@ function render() {
   const doneN = tasks.filter((t) => t.done).length;
 
   // 헤더: 날짜 + 완료율
-  $("date").textContent = toDate(day).toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
+  $("date").textContent = toDate(day).toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" });
   $("todayBtn").hidden = isToday();
   const pct = tasks.length ? Math.round((doneN / tasks.length) * 100) : 0;
-  $("ring").style.setProperty("--p", pct);
-  $("percent").textContent = pct + "%";
+  $("bar").style.width = pct + "%";
+  $("progressText").textContent = tasks.length ? `${doneN} / ${tasks.length} 완료 · ${pct}%` : "등록된 항목 없음";
 
   // 밤 9시 이후 + 아직 마무리 안 했으면 알림
   $("banner").hidden = !(isEvening() && tasks.length && !d.reviewed && step !== 4);
@@ -99,7 +105,7 @@ function render() {
 
 // ---- 1. 적기 ----
 function renderWrite(view, d) {
-  view.append(el("p", "hint", "머릿속에 있는 할 일을 생각나는 대로 모두 적어보세요. 순서는 신경 쓰지 않아도 돼요."));
+  view.append(el("p", "hint", "오늘 처리할 일을 순서 없이 모두 입력하세요."));
 
   const form = el("form", "add card");
   const input = el("input");
@@ -117,14 +123,14 @@ function renderWrite(view, d) {
   view.append(form);
 
   const tasks = active(d);
-  if (!tasks.length) return view.append(el("p", "empty", "아직 적은 할 일이 없어요"));
+  if (!tasks.length) return view.append(el("p", "empty", "등록된 항목이 없습니다"));
   const ul = el("ul", "list");
   tasks.forEach((t) => {
-    const li = el("li", "row " + (t.priority || ""));
+    const li = el("li", "row");
     const del = el("button", "icon", "✕");
     del.title = "삭제";
     del.onclick = () => { d.tasks = d.tasks.filter((x) => x !== t); save(); render(); };
-    li.append(el("span", "title", t.text), del);
+    li.append(titleEl(t), del);
     ul.append(li);
   });
   view.append(ul);
@@ -133,21 +139,21 @@ function renderWrite(view, d) {
 // ---- 2. 우선순위 ----
 function renderPriority(view, d) {
   const tasks = active(d);
-  view.append(el("p", "hint", "오늘 꼭 끝내야 하는 일만 '높음'으로 골라보세요. 3개 이하를 추천해요."));
+  view.append(el("p", "hint", "오늘 반드시 끝내야 하는 일만 '높음'으로 지정하세요. 3개 이하를 권장합니다."));
   const highN = tasks.filter((t) => t.priority === "high").length;
-  if (highN > 3) view.append(el("p", "warn", `⚠️ '높음'이 ${highN}개예요. 정말 오늘 다 해야 할까요?`));
-  if (!tasks.length) return view.append(el("p", "empty", "1단계에서 할 일을 먼저 적어주세요"));
+  if (highN > 3) view.append(el("p", "warn", `'높음' 항목이 ${highN}개입니다. 범위를 다시 검토해 보세요.`));
+  if (!tasks.length) return view.append(el("p", "empty", "01 작성 단계에서 항목을 먼저 입력하세요"));
 
   const ul = el("ul", "list");
   tasks.forEach((t) => {
-    const li = el("li", "row " + (t.priority || ""));
+    const li = el("li", "row");
     const seg = el("div", "seg");
     for (const k of ["high", "mid", "low"]) {
       const b = el("button", (t.priority === k ? "on " : "") + k, PRIORITY[k]);
       b.onclick = () => { t.priority = k; save(); render(); };
       seg.append(b);
     }
-    li.append(el("span", "title", t.text), seg);
+    li.append(titleEl(t), seg);
     ul.append(li);
   });
   view.append(ul);
@@ -158,14 +164,15 @@ function renderSchedule(view, d) {
   const tasks = active(d);
   const unplaced = tasks.filter((t) => t.slot == null).sort(byPriority);
   view.append(el("p", "hint", picked
-    ? "👇 넣을 시간대를 눌러주세요"
-    : "할 일을 누른 다음, 넣을 시간대를 누르세요. 중요한 일은 집중이 잘 되는 시간에!"));
+    ? "배치할 시간대를 선택하세요."
+    : "항목을 선택한 뒤 시간대를 누르세요. 우선순위가 높은 일은 집중도가 높은 시간에 두는 것이 좋습니다."));
 
   // 아직 시간이 정해지지 않은 할 일들
-  const pool = el("div", "pool card");
-  if (!unplaced.length) pool.append(el("span", "muted", tasks.length ? "✅ 모든 할 일에 시간이 정해졌어요" : "1단계에서 할 일을 먼저 적어주세요"));
+  const pool = el("div", "pool card" + (unplaced.length ? " sticky" : ""));
+  if (!unplaced.length) pool.append(el("span", "muted", tasks.length ? "모든 항목이 배치되었습니다" : "01 작성 단계에서 항목을 먼저 입력하세요"));
   unplaced.forEach((t) => {
-    const chip = el("button", `chip ${t.priority || ""} ${picked === t.id ? "picked" : ""}`, t.text);
+    const chip = el("button", `chip ${picked === t.id ? "picked" : ""}`);
+    chip.append(el("i", "dot " + (t.priority || "")), el("span", null, t.text));
     chip.onclick = () => { picked = picked === t.id ? null : t.id; render(); };
     pool.append(chip);
   });
@@ -178,8 +185,8 @@ function renderSchedule(view, d) {
     const slot = el("div", `slot ${h === nowHour ? "now" : ""} ${picked ? "target" : ""}`);
     const box = el("div", "slot-tasks");
     tasks.filter((t) => t.slot === h).sort(byPriority).forEach((t) => {
-      const chip = el("div", `chip placed ${t.priority || ""} ${t.done ? "done" : ""}`);
-      const check = el("button", "mini-check", t.done ? "✓" : "");
+      const chip = el("div", `event ${t.priority || ""} ${t.done ? "done" : ""}`);
+      const check = el("button", "check", t.done ? "✓" : "");
       check.title = "완료";
       check.onclick = (e) => { e.stopPropagation(); t.done = !t.done; save(); render(); };
       const remove = el("button", "mini-x", "✕");
@@ -208,23 +215,26 @@ function renderReview(view, d) {
   const timeOf = (t) => (t.slot != null ? pad(t.slot) + ":00" : "");
 
   const summary = el("div", "summary card");
-  summary.append(
-    el("div", "big", `${done.length} / ${tasks.length}`),
-    el("p", null, !tasks.length ? "이 날은 적은 할 일이 없어요"
-      : left.length ? `아직 ${left.length}개가 남았어요. 하나씩 정리해 볼까요?`
-      : "🎉 오늘 할 일을 모두 끝냈어요!"));
+  for (const [n, label] of [[done.length, "완료"], [left.length, "미완료"], [moved.length, "이월"]]) {
+    const stat = el("div", "stat");
+    stat.append(el("span", "num", n), el("span", "lbl", label));
+    summary.append(stat);
+  }
   view.append(summary);
+  view.append(el("p", "verdict", !tasks.length ? "이 날은 등록된 항목이 없습니다."
+    : left.length ? `미완료 ${left.length}건을 완료 처리하거나 내일로 이월하세요.`
+    : "모든 항목을 처리했습니다. 회고를 남기고 하루를 마감하세요."));
 
   if (left.length) {
-    view.append(el("h3", null, "남은 할 일 — 했으면 체크, 못 했으면 내일로"));
+    view.append(el("h3", null, "미완료"));
     const ul = el("ul", "list");
     left.forEach((t) => {
-      const li = el("li", "row " + (t.priority || ""));
-      const title = el("span", "title", t.text);
+      const li = el("li", "row");
+      const title = titleEl(t);
       title.append(el("span", "time", timeOf(t)));
-      const yes = el("button", "small-btn", "✓ 했어요");
+      const yes = el("button", "small-btn solid", "완료");
       yes.onclick = () => { t.done = true; save(); render(); };
-      const later = el("button", "small-btn alt", "내일로 →");
+      const later = el("button", "small-btn", "내일로 이월");
       later.onclick = () => moveToTomorrow(t);
       li.append(title, yes, later);
       ul.append(li);
@@ -233,11 +243,11 @@ function renderReview(view, d) {
   }
 
   if (done.length) {
-    view.append(el("h3", null, "끝낸 일"));
+    view.append(el("h3", null, "완료"));
     const ul = el("ul", "list");
     done.forEach((t) => {
-      const li = el("li", "row done " + (t.priority || ""));
-      const title = el("span", "title", "✓ " + t.text);
+      const li = el("li", "row done");
+      const title = titleEl(t);
       const undo = el("button", "icon", "↺");
       undo.title = "완료 취소";
       undo.onclick = () => { t.done = false; d.reviewed = false; save(); render(); };
@@ -247,24 +257,24 @@ function renderReview(view, d) {
     view.append(ul);
   }
 
-  if (moved.length) view.append(el("p", "hint", `➡️ 내일로 넘긴 일: ${moved.map((t) => t.text).join(", ")}`));
+  if (moved.length) view.append(el("p", "hint", `이월: ${moved.map((t) => t.text).join(", ")}`));
 
-  view.append(el("h3", null, "오늘 한 줄 회고"));
+  view.append(el("h3", null, "회고"));
   const note = el("textarea");
-  note.placeholder = "잘한 점, 아쉬운 점, 내일 바꿀 점을 적어보세요";
+  note.placeholder = "잘된 점 / 개선할 점 / 내일의 첫 번째 일";
   note.value = d.note || "";
   note.oninput = () => { d.note = note.value; save(); };
   view.append(note);
 
   const finish = el("button", "primary wide");
   if (d.reviewed) {
-    finish.textContent = "✅ 하루 마무리 완료! 푹 쉬세요";
+    finish.textContent = "하루 마감 완료";
     finish.disabled = true;
   } else if (left.length) {
-    finish.textContent = `남은 일 ${left.length}개를 정리하면 마무리할 수 있어요`;
+    finish.textContent = `미완료 ${left.length}건 처리 후 마감할 수 있습니다`;
     finish.disabled = true;
   } else {
-    finish.textContent = "🌙 오늘 하루 마무리하기";
+    finish.textContent = "하루 마감하기";
     finish.disabled = !tasks.length;
     finish.onclick = () => { d.reviewed = true; save(); render(); };
   }

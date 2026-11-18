@@ -3,38 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>하루 계획</title>
+  <title>Daily Plan</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main>
     <header>
-      <div>
-        <p class="label">하루 계획 <button id="todayBtn" class="link" hidden>오늘로 ↩</button></p>
-        <div class="daynav">
+      <div class="head-top">
+        <span class="overline">DAILY PLAN</span>
+        <button id="todayBtn" class="link" hidden>오늘로 이동</button>
+      </div>
+      <div class="daynav">
+        <h1 id="date"></h1>
+        <div class="arrows">
           <button id="prevDay" class="icon" aria-label="이전 날">‹</button>
-          <h1 id="date"></h1>
           <button id="nextDay" class="icon" aria-label="다음 날">›</button>
         </div>
       </div>
-      <div class="ring" id="ring" aria-label="완료율"><span id="percent">0%</span></div>
+      <div class="progress">
+        <div class="bar"><i id="bar"></i></div>
+        <span id="progressText"></span>
+      </div>
     </header>
 
     <div id="banner" class="banner" hidden>
-      <span>🌙 자기 전, 오늘 할 일을 마무리했는지 확인해요</span>
-      <button id="goReview">확인하기</button>
+      <span>21:00 이후입니다. 오늘 일정을 점검하고 하루를 마감하세요.</span>
+      <button id="goReview">리뷰 시작</button>
     </div>
 
     <nav id="steps" class="steps">
-      <button data-s="1"><b>1</b>적기<small></small></button>
-      <button data-s="2"><b>2</b>우선순위<small></small></button>
-      <button data-s="3"><b>3</b>시간 배분<small></small></button>
-      <button data-s="4"><b>4</b>마무리<small></small></button>
+      <button data-s="1"><b>01</b><span>작성</span><small></small></button>
+      <button data-s="2"><b>02</b><span>우선순위</span><small></small></button>
+      <button data-s="3"><b>03</b><span>일정 배치</span><small></small></button>
+      <button data-s="4"><b>04</b><span>하루 리뷰</span><small></small></button>
     </nav>
 
     <section id="view"></section>
 
-    <button id="next" class="primary wide">다음 단계 →</button>
+    <button id="next" class="primary wide">다음 단계</button>
   </main>
   <script src="app.js"></script>
 </body>
