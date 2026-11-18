@@ -6,7 +6,9 @@
 
 const KEY = "planner-v1";
 const HOURS = Array.from({ length: 18 }, (_, i) => i + 6); // 06시 ~ 23시
-const REVIEW_HOUR = 21; // 이 시간 이후엔 "마무리" 알림을 보여줘요
+const EVENING_HOUR = 21;                   // 이 시간 이후엔 앱 안에 "하루 마감" 배너를 보여줘요
+const REMINDER = { h: 23, m: 55, label: "23:55" }; // 구글 캘린더 매일 리뷰 알림 시각
+const DAY_START_HOUR = 4;                  // 새벽 4시 전까지는 "전날"로 취급 (자정 넘어 리뷰해도 OK)
 const PRIORITY = { high: "높음", mid: "보통", low: "낮음" };
 const rank = (t) => ({ high: 0, mid: 1, low: 2 }[t.priority] ?? 3);
 const byPriority = (a, b) => rank(a) - rank(b);
@@ -15,7 +17,7 @@ const byPriority = (a, b) => rank(a) - rank(b);
 const $ = (id) => document.getElementById(id);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const pad = (n) => String(n).padStart(2, "0");
-const dateKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const dateKey = (d = new Date(Date.now() - DAY_START_HOUR * 3600_000)) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const toDate = (key) => { const [y, m, d] = key.split("-").map(Number); return new Date(y, m - 1, d); };
 const shiftDay = (key, n) => { const d = toDate(key); d.setDate(d.getDate() + n); return dateKey(d); };
 function el(tag, cls, text) {
@@ -85,12 +87,12 @@ function addTaskToCalendar(t) {
 function addReviewReminder() {
   openCalendar({
     title: "하루 리뷰 · Daily Plan",
-    start: stamp(dateKey(), REVIEW_HOUR),
-    end: stamp(dateKey(), REVIEW_HOUR, 30),
+    start: stamp(dateKey(), REMINDER.h, REMINDER.m),
+    end: stamp(shiftDay(dateKey(), 1), 0, 0), // 자정까지
     details: "오늘 계획한 항목의 완료 여부를 점검하고, 미완료 항목은 완료 처리하거나 내일로 이월하세요.",
     recur: "RRULE:FREQ=DAILY",
   });
-  settings.reminder = true; saveSettings(); render();
+  settings.reminder = REMINDER.label; saveSettings(); render();
 }
 
 // 3) 마감한 하루 리뷰 결과를 그날의 종일 일정으로 기록
@@ -115,7 +117,7 @@ function logReviewToCalendar(d) {
 function reminderCard() {
   const card = el("div", "sync card");
   const text = el("p");
-  text.append(el("strong", null, "매일 21:00 리뷰 알림"),
+  text.append(el("strong", null, `매일 ${REMINDER.label} 리뷰 알림`),
     "구글 캘린더에 반복 일정으로 등록하면 앱을 닫아도 알림을 받을 수 있습니다.");
   const btn = el("button", "small-btn solid", "캘린더에 등록");
   btn.onclick = addReviewReminder;
@@ -129,7 +131,7 @@ let step = 1;          // 보고 있는 단계
 let picked = null;     // 3단계에서 시간대에 넣으려고 고른 할 일
 
 const isToday = () => day === dateKey();
-const isEvening = () => isToday() && new Date().getHours() >= REVIEW_HOUR;
+const isEvening = () => { const h = new Date().getHours(); return isToday() && (h >= EVENING_HOUR || h < DAY_START_HOUR); };
 const active = (d) => d.tasks.filter((t) => !t.moved); // 내일로 넘긴 건 빼고
 
 // 날짜를 열었을 때 어느 단계부터 보여줄지 정해요
@@ -283,7 +285,7 @@ function renderSchedule(view, d) {
   view.append(timeline);
 
   view.append(el("p", "hint gap", "블록의 '+ 캘린더'를 누르면 구글 캘린더에 해당 시간의 일정이 채워진 채로 열립니다. 저장하면 캘린더 앱이 알림을 보내줍니다."));
-  if (!settings.reminder) view.append(reminderCard());
+  if (settings.reminder !== REMINDER.label) view.append(reminderCard());
 }
 
 // ---- 4. 마무리 ----
@@ -366,7 +368,7 @@ function renderReview(view, d) {
     log.onclick = () => logReviewToCalendar(d);
     view.append(log);
   }
-  if (!settings.reminder) view.append(reminderCard());
+  if (settings.reminder !== REMINDER.label) view.append(reminderCard());
 }
 
 function moveToTomorrow(t) {
